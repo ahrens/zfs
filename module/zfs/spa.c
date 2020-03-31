@@ -6270,18 +6270,18 @@ if (raidz) {
 	 */
 	vdev_dirty(tvd, VDD_DTL, newvd, txg);
 
-		/*
-		 * Schedule the resilver to restart in the future. We do this to
-		 * ensure that dmu_sync-ed blocks have been stitched into the
-		 * respective datasets. We do not do this if resilvers have been
-		 * deferred.
-		 */
-		if (dsl_scan_resilvering(spa_get_dsl(spa)) &&
-		    spa_feature_is_enabled(spa, SPA_FEATURE_RESILVER_DEFER))
-			vdev_set_deferred_resilver(spa, newvd);
-		else
-			dsl_resilver_restart(spa->spa_dsl_pool, dtl_max_txg);
-	}
+	/*
+	 * Schedule the resilver to restart in the future. We do this to
+	 * ensure that dmu_sync-ed blocks have been stitched into the
+	 * respective datasets. We do not do this if resilvers have been
+	 * deferred.
+	 */
+        if (dsl_scan_resilvering(spa_get_dsl(spa)) &&
+            spa_feature_is_enabled(spa, SPA_FEATURE_RESILVER_DEFER))
+                vdev_defer_resilver(newvd);
+        else
+                dsl_scan_restart_resilver(spa->spa_dsl_pool, dtl_max_txg);
+}
 
 	if (spa->spa_bootfs)
 		spa_event_notify(spa, newvd, NULL, ESC_ZFS_BOOTFS_VDEV_ATTACH);

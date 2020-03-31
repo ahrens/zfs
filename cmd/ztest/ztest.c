@@ -7111,7 +7111,10 @@ ztest_run(ztest_shared_t *zs)
 	metaslab_preload_limit = ztest_random(20) + 1;
 	ztest_spa = spa;
 
-	VERIFY0(vdev_raidz_impl_set("cycle"));
+	/* 
+	 * BUGBUG - raidz expansion commented out below because raidz math library is excluded from makefile
+	 * VERIFY0(vdev_raidz_impl_set("cycle")); 
+	 */
 
 	dmu_objset_stats_t dds;
 	VERIFY0(ztest_dmu_objset_own(ztest_opts.zo_pool,

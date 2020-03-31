@@ -2112,7 +2112,7 @@ vdev_raidz_io_start(zio_t *zio)
 	if (vdrz->vd_logical_width != vdrz->vd_physical_width) {
 		/* XXX rangelock not needed after expansion completes */
 		locked_range_t *lr =
-		    rangelock_enter(&vdrz->vn_vre.vre_rangelock,
+		    zfs_rangelock_enter(&vdrz->vn_vre.vre_rangelock,
 		    zio->io_offset, zio->io_size, RL_READER);
 
 		rm = vdev_raidz_map_alloc_expanded(zio->io_abd,
@@ -2911,7 +2911,7 @@ vdev_raidz_io_done(zio_t *zio)
 		}
 	}
 	if (rm->rm_lr != NULL) {
-		rangelock_exit(rm->rm_lr);
+		zfs_rangelock_exit(rm->rm_lr);
 		rm->rm_lr = NULL;
 	}
 }
@@ -3011,7 +3011,7 @@ raidz_reflow_sync(void *arg, dmu_tx_t *tx)
 	 * Ensure there are no i/os to the range that is being committed.
 	 * XXX This might be overkill?
 	 */
-	locked_range_t *lr = rangelock_enter(&vre->vre_rangelock,
+	locked_range_t *lr = zfs_rangelock_enter(&vre->vre_rangelock,
 	    vre->vre_offset_phys,
 	    vre->vre_offset_pertxg[txgoff] - vre->vre_offset_phys,
 	    RL_WRITER);
@@ -3021,7 +3021,7 @@ raidz_reflow_sync(void *arg, dmu_tx_t *tx)
 	 */
 	vre->vre_offset_phys = vre->vre_offset_pertxg[txgoff];
 	vre->vre_offset_pertxg[txgoff] = 0;
-	rangelock_exit(lr);
+	zfs_rangelock_exit(lr);
 
 	/*
 	 * vre_offset_phys will be added to the on-disk config by
@@ -3096,7 +3096,7 @@ raidz_reflow_write_done(zio_t *zio)
 	cv_signal(&vre->vre_cv);
 	mutex_exit(&vre->vre_lock);
 
-	rangelock_exit(rra->rra_lr);
+	zfs_rangelock_exit(rra->rra_lr);
 
 	kmem_free(rra, sizeof (*rra));
 	spa_config_exit(zio->io_spa, SCL_STATE, zio->io_spa);
@@ -3169,7 +3169,7 @@ raidz_reflow_impl(vdev_t *vd, vdev_raidz_expand_t *vre, range_tree_t *rt,
 
 	raidz_reflow_arg_t *rra = kmem_zalloc(sizeof (*rra), KM_SLEEP);
 	rra->rra_vre = vre;
-	rra->rra_lr = rangelock_enter(&vre->vre_rangelock,
+	rra->rra_lr = zfs_rangelock_enter(&vre->vre_rangelock,
 	    offset, length, RL_WRITER);
 
 	mutex_enter(&vre->vre_lock);
@@ -3482,7 +3482,7 @@ vdev_raidz_get_tsd(spa_t *spa, nvlist_t *nv)
 	vdrz->vn_vre.vre_offset_phys = UINT64_MAX;
 	mutex_init(&vdrz->vn_vre.vre_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&vdrz->vn_vre.vre_cv, NULL, CV_DEFAULT, NULL);
-	rangelock_init(&vdrz->vn_vre.vre_rangelock, NULL, NULL);
+	zfs_rangelock_init(&vdrz->vn_vre.vre_rangelock, NULL, NULL);
 
 	uint_t children;
 	nvlist_t **child;
