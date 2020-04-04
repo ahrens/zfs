@@ -3067,8 +3067,8 @@ raidz_reflow_complete_sync(void *arg, dmu_tx_t *tx)
 	    sizeof (end_time), 1, &end_time, tx));
 
 	spa_history_log_internal(spa, "raidz vdev expansion completed",  tx,
-	    "%s vdev %lu new width %lu", spa_name(spa),
-	    vd->vdev_id, vd->vdev_children);
+	    "%s vdev %llu new width %llu", spa_name(spa),
+	    (unsigned long long)vd->vdev_id, (unsigned long long)vd->vdev_children);
 }
 
 /*
@@ -3118,12 +3118,11 @@ raidz_reflow_impl(vdev_t *vd, vdev_raidz_expand_t *vre, range_tree_t *rt,
 {
 	spa_t *spa = vd->vdev_spa;
 	int ashift = vd->vdev_top->vdev_ashift;
-	range_seg_t *rs = avl_first(&rt->rt_root);
-	if (rs == NULL)
+	uint64_t offset, size;
+    if (!range_tree_find_in(rt, 0, vd->vdev_top->vdev_asize, &offset, &size))
 		return (B_FALSE);
-	uint64_t offset = rs->rs_start;
 	ASSERT(IS_P2ALIGNED(offset, 1 << ashift));
-	ASSERT3U(rs->rs_end - rs->rs_start, >=, 1 << ashift);
+	ASSERT3U(size, >=, 1 << ashift);
 	uint64_t length = 1 << ashift;
 	int txgoff = dmu_tx_get_txg(tx) & TXG_MASK;
 
@@ -3249,7 +3248,7 @@ spa_raidz_expand_cb(void *arg, zthr_t *zthr)
 		 */
 		if (msp->ms_new) {
 			mutex_exit(&msp->ms_lock);
-			metaslab_enable(msp, B_FALSE);
+			metaslab_enable(msp, B_FALSE, B_FALSE);
 			continue;
 		}
 
@@ -3260,7 +3259,7 @@ spa_raidz_expand_cb(void *arg, zthr_t *zthr)
 		 * space.  Note that there may be a little bit more free
 		 * space (e.g. in ms_defer), and it's fine to copy that too.
 		 */
-		range_tree_t *rt = range_tree_create(NULL, NULL);
+		range_tree_t *rt = range_tree_create(NULL, RANGE_SEG64, NULL, 0, 0);
 		range_tree_add(rt, msp->ms_start, msp->ms_size);
 		range_tree_walk(msp->ms_allocatable, range_tree_remove, rt);
 		mutex_exit(&msp->ms_lock);
@@ -3348,7 +3347,7 @@ spa_raidz_expand_cb(void *arg, zthr_t *zthr)
 		mutex_exit(&vre->vre_lock);
 #endif
 
-		metaslab_enable(msp, B_FALSE);
+		metaslab_enable(msp, B_FALSE, B_FALSE);
 		range_tree_vacate(rt, NULL, NULL);
 		range_tree_destroy(rt);
 
@@ -3428,7 +3427,7 @@ vdev_raidz_attach_sync(void *arg, dmu_tx_t *tx)
 
 	spa_history_log_internal(spa, "raidz vdev expansion started",  tx,
 	    "%s vdev %llu new width %llu", spa_name(spa),
-	    raidvd->vdev_id, raidvd->vdev_children);
+	    (unsigned long long)raidvd->vdev_id, (unsigned long long)raidvd->vdev_children);
 }
 
 /*
@@ -3446,6 +3445,8 @@ vdev_raidz_config_generate(vdev_t *vd, nvlist_t *nv)
 	 * Make sure someone hasn't managed to sneak a fancy new vdev
 	 * into a crufty old storage pool.
 	 */
+	/* Shut up compiler warning about spa being unused */
+	(void)spa;
 	ASSERT(vdrz->vd_nparity == 1 ||
 	    (vdrz->vd_nparity <= 2 &&
 	    spa_version(spa) >= SPA_VERSION_RAIDZ2) ||
