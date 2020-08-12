@@ -27,6 +27,7 @@ USER_C = \
 	taskq.c \
 	util.c
 
+# BUGBUG raidz expansion, removed raidz math from following
 KERNEL_C = \
 	zfeature_common.c \
 	zfs_comutil.c \
@@ -136,7 +137,6 @@ KERNEL_C = \
 	vdev_raidz_math_scalar.c \
 	vdev_raidz_math_sse2.c \
 	vdev_raidz_math_ssse3.c \
-	vdev_raidz_math_powerpc_altivec.c \
 	vdev_rebuild.c \
 	vdev_removal.c \
 	vdev_root.c \

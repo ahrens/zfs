@@ -786,6 +786,9 @@ abd_iterate_func(abd_t *abd, size_t off, size_t size,
 	boolean_t abd_multi;
 	abd_t *c_abd;
 
+	if (size == 0)
+		return (ret);
+
 	abd_verify(abd);
 	ASSERT3U(off + size, <=, abd->abd_size);
 
@@ -919,6 +922,9 @@ abd_iterate_func2(abd_t *dabd, abd_t *sabd, size_t doff, size_t soff,
 	struct abd_iter daiter, saiter;
 	boolean_t dabd_is_gang_abd, sabd_is_gang_abd;
 	abd_t *c_dabd, *c_sabd;
+
+	if (size == 0)
+		return (ret);
 
 	abd_verify(dabd);
 	abd_verify(sabd);
