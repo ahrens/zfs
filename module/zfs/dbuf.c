@@ -154,6 +154,8 @@ static boolean_t dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
 static void dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
 static void dbuf_sync_leaf_verify_bonus_dnode(dbuf_dirty_record_t *dr);
 static int dbuf_read_verify_dnode_crypt(dmu_buf_impl_t *db, uint32_t flags);
+static int dbuf_get_bp_from_indirect(dnode_t *dn, uint8_t level, uint64_t blkid,
+    int index, blkptr_t *bpp);
 
 extern inline void dmu_buf_init_user(dmu_buf_user_t *dbu,
     dmu_buf_evict_func_t *evict_func_sync,
@@ -3217,15 +3219,10 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 	while (curlevel < nlevels - 1) {
 		int parent_level = curlevel + 1;
 		uint64_t parent_blkid = curblkid >> epbs;
-		dmu_buf_impl_t *db;
 
-		if (dbuf_hold_impl(dn, parent_level, parent_blkid,
-		    FALSE, TRUE, FTAG, &db) == 0) {
-			blkptr_t *bpp = db->db_buf->b_data;
-			bp = bpp[P2PHASE(curblkid, 1 << epbs)];
-			dbuf_rele(db, FTAG);
+		if (dbuf_get_bp_from_indirect(dn, parent_level, parent_blkid,
+		    P2PHASE(curblkid, 1 << epbs), &bp) == 0)
 			break;
-		}
 
 		curlevel = parent_level;
 		curblkid = parent_blkid;
@@ -3438,6 +3435,39 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 	ASSERT3U(db->db_blkid, ==, blkid);
 	ASSERT3U(db->db_level, ==, level);
 	*dbp = db;
+
+	return (0);
+}
+
+/*
+ * If this indirect block is cached, read the specified blkptr from it.
+ * Otherwise, return nonzero.  This avoids some DMU/ARC operations to improve
+ * performance compared to the more general routines
+ * dbuf_hold_impl()/dbuf_rele().
+ */
+static int
+dbuf_get_bp_from_indirect(dnode_t *dn, uint8_t level, uint64_t blkid,
+    int index, blkptr_t *bpp)
+{
+	ASSERT(level > 0);
+	ASSERT(RW_LOCK_HELD(&dn->dn_struct_rwlock));
+	ASSERT3U(dn->dn_nlevels, >, level);
+
+	/* dbuf_find() returns with db_mtx held */
+	dmu_buf_impl_t *db =
+	    dbuf_find(dn->dn_objset, dn->dn_object, level, blkid);
+
+	if (db == NULL)
+		return (SET_ERROR(ENOENT));
+
+	if (db->db_state != DB_CACHED) {
+		mutex_exit(&db->db_mtx);
+		return (SET_ERROR(ENOENT));
+	}
+
+	blkptr_t *bparray = db->db.db_data;
+	*bpp = bparray[index];
+	mutex_exit(&db->db_mtx);
 
 	return (0);
 }
