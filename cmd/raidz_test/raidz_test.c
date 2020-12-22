@@ -466,6 +466,9 @@ vdev_raidz_map_alloc_expanded(abd_t *abd, uint64_t size, uint64_t offset,
 			rr->rr_col[c].rc_skipped = 0;
 			rr->rr_col[c].rc_need_orig_restore = B_FALSE;
 
+			list_link_init(&rr->rr_col[c].rc_abdstruct.abd_gang_link);
+			mutex_init(&rr->rr_col[c].rc_abdstruct.abd_mtx, NULL, MUTEX_DEFAULT, NULL);
+
 			uint64_t dc = c - rr->rr_firstdatacol;
 			if (c < rr->rr_firstdatacol) {
 				rr->rr_col[c].rc_size = 1ULL << ashift;
@@ -493,7 +496,9 @@ vdev_raidz_map_alloc_expanded(abd_t *abd, uint64_t size, uint64_t offset,
 				}
 				rr->rr_col[c].rc_size = 1ULL << ashift;
 				rr->rr_col[c].rc_abd =
-				    abd_get_offset(abd, off << ashift);
+				    abd_get_offset_impl(
+				    &rr->rr_col[c].rc_abdstruct,
+				    abd, off << ashift, 1 << ashift);
 			}
 
 			asize += rr->rr_col[c].rc_size;
