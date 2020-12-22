@@ -105,20 +105,6 @@
 /* see block comment above for description */
 int zfs_abd_scatter_enabled = B_TRUE;
 
-boolean_t
-abd_is_linear_page(abd_t *abd)
-{
-	return ((abd->abd_flags & ABD_FLAG_LINEAR_PAGE) != 0 ?
-	    B_TRUE : B_FALSE);
-}
-
-boolean_t
-abd_is_gang(abd_t *abd)
-{
-	return ((abd->abd_flags & ABD_FLAG_GANG) != 0 ? B_TRUE :
-	    B_FALSE);
-}
-
 void
 abd_verify(abd_t *abd)
 {
@@ -145,13 +131,6 @@ abd_verify(abd_t *abd)
 	} else {
 		abd_verify_scatter(abd);
 	}
-}
-
-uint_t
-abd_get_size(abd_t *abd)
-{
-	abd_verify(abd);
-	return (abd->abd_size);
 }
 
 /*
@@ -210,7 +189,7 @@ abd_put_gang_abd(abd_t *abd)
 }
 
 void
-abd_put_impl(abd_t *abd)
+abd_put_struct(abd_t *abd)
 {
 	abd_verify(abd);
 	ASSERT(!(abd->abd_flags & ABD_FLAG_OWNER));
@@ -236,7 +215,7 @@ abd_put(abd_t *abd)
 	if (abd == NULL)
 		return;
 
-	abd_put_impl(abd);
+	abd_put_struct(abd);
 	abd_free_struct(abd);
 }
 
@@ -359,17 +338,6 @@ abd_alloc_sametype(abd_t *sabd, size_t size)
 	}
 }
 
-static void abd_setup_gang_abd(abd_t *abd)
-{
-	abd->abd_flags = ABD_FLAG_GANG | ABD_FLAG_OWNER;
-	abd->abd_size = 0;
-	abd->abd_parent = NULL;
-	list_create(&ABD_GANG(abd).abd_gang_chain,
-	    sizeof (abd_t), offsetof(abd_t, abd_gang_link));
-	zfs_refcount_create(&abd->abd_children);
-
-}
-
 /*
  * Create gang ABD that will be the head of a list of ABD's. This is used
  * to "chain" scatter/gather lists together when constructing aggregated
@@ -379,7 +347,12 @@ abd_t *
 abd_alloc_gang_abd(void)
 {
 	abd_t *abd = abd_alloc_struct(0);
-	abd_setup_gang_abd(abd);
+	abd->abd_flags = ABD_FLAG_GANG | ABD_FLAG_OWNER;
+	abd->abd_size = 0;
+	abd->abd_parent = NULL;
+	list_create(&ABD_GANG(abd).abd_gang_chain,
+	    sizeof (abd_t), offsetof(abd_t, abd_gang_link));
+	zfs_refcount_create(&abd->abd_children);
 	return (abd);
 }
 
@@ -434,7 +407,7 @@ abd_gang_add(abd_t *pabd, abd_t *cabd, boolean_t free_on_free)
 
 	/*
 	 * If the child being added is a gang ABD, we will add the
-	 * childs ABDs to the parent gang ABD. This alllows us to account
+	 * child's ABDs to the parent gang ABD. This allows us to account
 	 * for the offset correctly in the parent gang ABD.
 	 */
 	if (abd_is_gang(cabd)) {
@@ -518,17 +491,20 @@ abd_gang_get_offset(abd_t *abd, size_t *off)
 }
 
 /*
- * Fill in the provided abd to point to offset off of sabd. It shares the
- * underlying buffer data with sabd. Use abd_put() to free. sabd must not be
- * freed while any derived ABDs exist.
+ * Allocate a new ABD, using the provided struct (if non-NULL, and if
+ * circumstances allow).  The returned ABD will point to offset off of sabd.
+ * It shares the underlying buffer data with sabd. Use abd_put() to free.
+ * sabd must not be freed while any derived ABDs exist.
  */
-abd_t *
+static abd_t *
 abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 {
 	abd_verify(sabd);
-	ASSERT3U(off, <=, sabd->abd_size);
+	ASSERT3U(off + size, <=, sabd->abd_size);
 
 	if (abd_is_linear(sabd)) {
+		if (abd == NULL)
+			abd = abd_alloc_struct(0);
 		/*
 		 * Even if this buf is filesystem metadata, we only track that
 		 * if we own the underlying data buffer, which is not true in
@@ -539,8 +515,8 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 		ABD_LINEAR_BUF(abd) = (char *)ABD_LINEAR_BUF(sabd) + off;
 	} else if (abd_is_gang(sabd)) {
 		size_t left = size;
-
-		abd_setup_gang_abd(abd);
+		if (abd == NULL)
+			abd = abd_alloc_gang_abd();
 
 		abd->abd_flags &= ~ABD_FLAG_OWNER;
 		for (abd_t *cabd = abd_gang_get_offset(sabd, &off);
@@ -548,15 +524,15 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 		    cabd = list_next(&ABD_GANG(sabd).abd_gang_chain, cabd)) {
 			int csize = MIN(left, cabd->abd_size - off);
 
-			abd_t *nabd = abd_get_offset_impl(abd_alloc_struct(0),
-			    cabd, off, csize);
+			abd_t *nabd = abd_get_offset_size(cabd, off, csize);
+			/* XXX how does nabd get freed? */
 			abd_gang_add(abd, nabd, B_FALSE);
 			left -= csize;
 			off = 0;
 		}
 		ASSERT3U(left, ==, 0);
 	} else {
-		abd_get_offset_scatter(abd, sabd, off);
+		abd = abd_get_offset_scatter(abd, sabd, off);
 	}
 
 	abd->abd_size = size;
@@ -566,19 +542,37 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 	return (abd);
 }
 
+/*
+ * Like abd_get_offset_size(), but memory for the abd_t is provided by the
+ * caller.  Using this routine can improve performance by avoiding the cost
+ * of allocating memory for the abd_t struct, and updating the abd stats.
+ * Usually, the provided abd is returned, but in some circumstances (FreeBSD,
+ * if sabd is scatter and size is more than 2 pages) a new abd_t may need to
+ * be allocated.  Therefore callers should be careful to use the returned
+ * abd_t*, and when freeing, check if it is the same as the provided struct
+ * before calling abd_put_struct().
+ */
+abd_t *
+abd_get_offset_struct(abd_t *abd, abd_t *sabd, size_t off, size_t size)
+{
+	list_link_init(&abd->abd_gang_link);
+	mutex_init(&abd->abd_mtx, NULL, MUTEX_DEFAULT, NULL);
+	return (abd_get_offset_impl(abd, sabd, off, size));
+}
+
 abd_t *
 abd_get_offset(abd_t *sabd, size_t off)
 {
 	size_t size = sabd->abd_size > off ? sabd->abd_size - off : 0;
 	VERIFY3U(size, >, 0);
-	return (abd_get_offset_impl(abd_alloc_struct(0), sabd, off, size));
+	return (abd_get_offset_impl(NULL, sabd, off, size));
 }
 
 abd_t *
 abd_get_offset_size(abd_t *sabd, size_t off, size_t size)
 {
 	ASSERT3U(off + size, <=, sabd->abd_size);
-	return (abd_get_offset_impl(abd_alloc_struct(0), sabd, off, size));
+	return (abd_get_offset_impl(NULL, sabd, off, size));
 }
 
 /*

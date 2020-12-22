@@ -856,7 +856,7 @@ vdev_draid_cksum_report(zio_t *zio, zio_cksum_report_t *zcr, void *arg)
 			if (abd_is_gang(col->rc_abd)) {
 				abd_free(col->rc_abd);
 			} else if (col->rc_abd == &col->rc_abdstruct) {
-				abd_put_impl(col->rc_abd);
+				abd_put_struct(col->rc_abd);
 			} else {
 				abd_put(col->rc_abd);
 			}
@@ -905,7 +905,7 @@ vdev_draid_map_alloc_write(zio_t *zio, uint64_t abd_offset, raidz_row_t *rr)
 			rc->rc_abd = abd_get_zeros(skip_size);
 		} else if (rc->rc_size == parity_size) {
 			/* this is a "big column" */
-			rc->rc_abd = abd_get_offset_impl(&rc->rc_abdstruct,
+			rc->rc_abd = abd_get_offset_struct(&rc->rc_abdstruct,
 			    zio->io_abd, abd_off, rc->rc_size);
 		} else {
 			/* short data column, add a skip sector */
@@ -961,7 +961,7 @@ vdev_draid_map_alloc_scrub(zio_t *zio, uint64_t abd_offset, raidz_row_t *rr)
 			skip_off += skip_size;
 		} else if (rc->rc_size == parity_size) {
 			/* this is a "big column" */
-			rc->rc_abd = abd_get_offset_impl(&rc->rc_abdstruct,
+			rc->rc_abd = abd_get_offset_struct(&rc->rc_abdstruct,
 			    zio->io_abd, abd_off, rc->rc_size);
 		} else {
 			/* short data column, add a skip sector */
@@ -1009,7 +1009,7 @@ vdev_draid_map_alloc_read(zio_t *zio, uint64_t abd_offset, raidz_row_t *rr)
 		raidz_col_t *rc = &rr->rr_col[c];
 
 		if (rc->rc_size > 0) {
-			rc->rc_abd = abd_get_offset_impl(&rc->rc_abdstruct,
+			rc->rc_abd = abd_get_offset_struct(&rc->rc_abdstruct,
 			    zio->io_abd, abd_off, rc->rc_size);
 			abd_off += rc->rc_size;
 		}

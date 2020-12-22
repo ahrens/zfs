@@ -157,7 +157,7 @@ vdev_raidz_row_free(raidz_row_t *rr)
 				abd_free(rr->rr_col[c].rc_abd);
 			} else if (rr->rr_col[c].rc_abd ==
 			    &rr->rr_col[c].rc_abdstruct) {
-				abd_put_impl(rr->rr_col[c].rc_abd);
+				abd_put_struct(rr->rr_col[c].rc_abd);
 			} else {
 				abd_put(rr->rr_col[c].rc_abd);
 			}
@@ -349,7 +349,7 @@ vdev_raidz_cksum_report(zio_t *zio, zio_cksum_report_t *zcr, void *arg)
 			abd_copy(tmp, col->rc_abd, col->rc_size);
 
 			if (col->rc_abd == &col->rc_abdstruct) {
-				abd_put_impl(col->rc_abd);
+				abd_put_struct(col->rc_abd);
 			} else {
 				abd_put(col->rc_abd);
 			}
@@ -466,9 +466,6 @@ vdev_raidz_map_alloc(zio_t *zio, uint64_t ashift, uint64_t dcols,
 		rc->rc_repair = 0;
 		rc->rc_need_orig_restore = B_FALSE;
 
-		list_link_init(&rc->rc_abdstruct.abd_gang_link);
-		mutex_init(&rc->rc_abdstruct.abd_mtx, NULL, MUTEX_DEFAULT, NULL);
-
 		if (c >= acols)
 			rc->rc_size = 0;
 		else if (c < bc)
@@ -489,7 +486,7 @@ vdev_raidz_map_alloc(zio_t *zio, uint64_t ashift, uint64_t dcols,
 
 	for (uint64_t off = 0; c < acols; c++) {
 		raidz_col_t *rc = &rr->rr_col[c];
-		rc->rc_abd = abd_get_offset_impl(&rc->rc_abdstruct,
+		rc->rc_abd = abd_get_offset_struct(&rc->rc_abdstruct,
 		    zio->io_abd, off, rc->rc_size);
 		off += rc->rc_size;
 	}

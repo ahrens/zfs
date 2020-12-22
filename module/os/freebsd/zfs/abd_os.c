@@ -354,10 +354,9 @@ abd_alloc_scatter_offset_chunkcnt(size_t chunkcnt)
 	return (abd);
 }
 
-void
+abd_t *
 abd_get_offset_scatter(abd_t *abd, abd_t *sabd, size_t off)
 {
-
 	abd_verify(sabd);
 	ASSERT3U(off, <=, sabd->abd_size);
 
@@ -365,8 +364,18 @@ abd_get_offset_scatter(abd_t *abd, abd_t *sabd, size_t off)
 	uint_t chunkcnt = abd_scatter_chunkcnt(sabd) -
 	    (new_offset / zfs_abd_chunk_size);
 
-	VERIFY(!"does not work, provided abd struct must be correct size");
-	abd = abd_alloc_scatter_offset_chunkcnt(chunkcnt);
+	/*
+	 * If an abd struct is provided, it is only the minimum size.  If we
+	 * need additional chunks, we need to allocate a new struct.
+	 */
+	if (abd != NULL &&
+	    offsetof(abd_t, abd_u.abd_scatter.abd_chunks[chunkcnt]) >
+	    sizeof (abd_t)) {
+		abd = NULL;
+	}
+
+	if (abd == NULL)
+		abd = abd_alloc_scatter_offset_chunkcnt(chunkcnt);
 
 	/*
 	 * Even if this buf is filesystem metadata, we only track that
