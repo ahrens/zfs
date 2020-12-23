@@ -202,7 +202,7 @@ abd_free_chunks(abd_t *abd)
 }
 
 abd_t *
-abd_alloc_struct(size_t size)
+abd_alloc_struct_impl(size_t size)
 {
 	uint_t chunkcnt = abd_chunkcnt_for_bytes(size);
 	/*
@@ -216,24 +216,18 @@ abd_alloc_struct(size_t size)
 	    offsetof(abd_t, abd_u.abd_scatter.abd_chunks[chunkcnt]));
 	abd_t *abd = kmem_alloc(abd_size, KM_PUSHPAGE);
 	ASSERT3P(abd, !=, NULL);
-	list_link_init(&abd->abd_gang_link);
-	mutex_init(&abd->abd_mtx, NULL, MUTEX_DEFAULT, NULL);
-	zfs_refcount_create(&abd->abd_children);
 	ABDSTAT_INCR(abdstat_struct_size, abd_size);
 
 	return (abd);
 }
 
 void
-abd_free_struct(abd_t *abd)
+abd_free_struct_impl(abd_t *abd)
 {
 	uint_t chunkcnt = abd_is_linear(abd) || abd_is_gang(abd) ? 0 :
 	    abd_scatter_chunkcnt(abd);
 	ssize_t size = MAX(sizeof (abd_t),
 	    offsetof(abd_t, abd_u.abd_scatter.abd_chunks[chunkcnt]));
-	mutex_destroy(&abd->abd_mtx);
-	ASSERT(!list_link_active(&abd->abd_gang_link));
-	zfs_refcount_destroy(&abd->abd_children)
 	kmem_free(abd, size);
 	ABDSTAT_INCR(abdstat_struct_size, -size);
 }

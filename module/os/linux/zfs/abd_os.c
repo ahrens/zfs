@@ -185,7 +185,7 @@ abd_chunkcnt_for_bytes(size_t size)
 }
 
 abd_t *
-abd_alloc_struct(size_t size)
+abd_alloc_struct_impl(size_t size)
 {
 	/*
 	 * In Linux we do not use the size passed in during ABD
@@ -193,20 +193,14 @@ abd_alloc_struct(size_t size)
 	 */
 	abd_t *abd = kmem_cache_alloc(abd_cache, KM_PUSHPAGE);
 	ASSERT3P(abd, !=, NULL);
-	list_link_init(&abd->abd_gang_link);
-	mutex_init(&abd->abd_mtx, NULL, MUTEX_DEFAULT, NULL);
-	zfs_refcount_create(&abd->abd_children);
 	ABDSTAT_INCR(abdstat_struct_size, sizeof (abd_t));
 
 	return (abd);
 }
 
 void
-abd_free_struct(abd_t *abd)
+abd_free_struct_impl(abd_t *abd)
 {
-	mutex_destroy(&abd->abd_mtx);
-	ASSERT(!list_link_active(&abd->abd_gang_link));
-	zfs_refcount_destroy(&abd->abd_children);
 	kmem_cache_free(abd_cache, abd);
 	ABDSTAT_INCR(abdstat_struct_size, -(int)sizeof (abd_t));
 }

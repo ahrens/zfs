@@ -133,6 +133,37 @@ abd_verify(abd_t *abd)
 	}
 }
 
+static void
+abd_init_struct(abd_t *abd)
+{
+	list_link_init(&abd->abd_gang_link);
+	mutex_init(&abd->abd_mtx, NULL, MUTEX_DEFAULT, NULL);
+	zfs_refcount_create(&abd->abd_children);
+}
+
+static void
+abd_fini_struct(abd_t *abd)
+{
+	mutex_destroy(&abd->abd_mtx);
+	ASSERT(!list_link_active(&abd->abd_gang_link));
+	zfs_refcount_destroy(&abd->abd_children);
+}
+
+abd_t *
+abd_alloc_struct(size_t size)
+{
+	abd_t *abd = abd_alloc_struct_impl(size);
+	abd_init_struct(abd);
+	return (abd);
+}
+
+void
+abd_free_struct(abd_t *abd)
+{
+	abd_fini_struct(abd);
+	abd_free_struct_impl(abd);
+}
+
 /*
  * Allocate an ABD, along with its own underlying data buffers. Use this if you
  * don't care whether the ABD is linear or not.
@@ -186,8 +217,8 @@ abd_put_gang_abd(abd_t *abd)
 	list_destroy(&ABD_GANG(abd).abd_gang_chain);
 }
 
-static void
-abd_put_impl(abd_t *abd)
+void
+abd_put_struct(abd_t *abd)
 {
 	abd_verify(abd);
 	ASSERT(!(abd->abd_flags & ABD_FLAG_OWNER));
@@ -199,16 +230,7 @@ abd_put_impl(abd_t *abd)
 
 	if (abd_is_gang(abd))
 		abd_put_gang_abd(abd);
-}
-
-void
-abd_put_struct(abd_t *abd)
-{
-	abd_put_impl(abd);
-
-	ASSERT(!list_link_active(&abd->abd_gang_link));
-	mutex_destroy(&abd->abd_mtx);
-	zfs_refcount_destroy(&abd->abd_children);
+	abd_fini_struct(abd);
 }
 
 /*
@@ -221,8 +243,8 @@ abd_put(abd_t *abd)
 	if (abd == NULL)
 		return;
 
-	abd_put_impl(abd);
-	abd_free_struct(abd);
+	abd_put_struct(abd);
+	abd_free_struct_impl(abd);
 }
 
 /*
@@ -560,9 +582,7 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 abd_t *
 abd_get_offset_struct(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 {
-	list_link_init(&abd->abd_gang_link);
-	mutex_init(&abd->abd_mtx, NULL, MUTEX_DEFAULT, NULL);
-	zfs_refcount_create(&abd->abd_children);
+	abd_init_struct(abd);
 	return (abd_get_offset_impl(abd, sabd, off, size));
 }
 
