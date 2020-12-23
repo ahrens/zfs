@@ -155,7 +155,6 @@ abd_alloc(size_t size, boolean_t is_metadata)
 	}
 	abd->abd_size = size;
 	abd->abd_parent = NULL;
-	zfs_refcount_create(&abd->abd_children);
 
 	abd_update_scatter_stats(abd, ABDSTAT_INCR);
 
@@ -167,7 +166,6 @@ abd_free_scatter(abd_t *abd)
 {
 	abd_free_chunks(abd);
 
-	zfs_refcount_destroy(&abd->abd_children);
 	abd_update_scatter_stats(abd, ABDSTAT_DECR);
 	abd_free_struct(abd);
 }
@@ -188,8 +186,8 @@ abd_put_gang_abd(abd_t *abd)
 	list_destroy(&ABD_GANG(abd).abd_gang_chain);
 }
 
-void
-abd_put_struct(abd_t *abd)
+static void
+abd_put_impl(abd_t *abd)
 {
 	abd_verify(abd);
 	ASSERT(!(abd->abd_flags & ABD_FLAG_OWNER));
@@ -201,7 +199,15 @@ abd_put_struct(abd_t *abd)
 
 	if (abd_is_gang(abd))
 		abd_put_gang_abd(abd);
+}
 
+void
+abd_put_struct(abd_t *abd)
+{
+	abd_put_impl(abd);
+
+	ASSERT(!list_link_active(&abd->abd_gang_link));
+	mutex_destroy(&abd->abd_mtx);
 	zfs_refcount_destroy(&abd->abd_children);
 }
 
@@ -215,7 +221,7 @@ abd_put(abd_t *abd)
 	if (abd == NULL)
 		return;
 
-	abd_put_struct(abd);
+	abd_put_impl(abd);
 	abd_free_struct(abd);
 }
 
@@ -237,7 +243,6 @@ abd_alloc_linear(size_t size, boolean_t is_metadata)
 	}
 	abd->abd_size = size;
 	abd->abd_parent = NULL;
-	zfs_refcount_create(&abd->abd_children);
 
 	if (is_metadata) {
 		ABD_LINEAR_BUF(abd) = zio_buf_alloc(size);
@@ -263,9 +268,7 @@ abd_free_linear(abd_t *abd)
 		zio_data_buf_free(ABD_LINEAR_BUF(abd), abd->abd_size);
 	}
 
-	zfs_refcount_destroy(&abd->abd_children);
 	abd_update_linear_stats(abd, ABDSTAT_DECR);
-
 	abd_free_struct(abd);
 }
 
@@ -297,7 +300,6 @@ abd_free_gang_abd(abd_t *abd)
 	}
 	ASSERT0(abd->abd_size);
 	list_destroy(&ABD_GANG(abd).abd_gang_chain);
-	zfs_refcount_destroy(&abd->abd_children);
 	abd_free_struct(abd);
 }
 
@@ -352,7 +354,6 @@ abd_alloc_gang_abd(void)
 	abd->abd_parent = NULL;
 	list_create(&ABD_GANG(abd).abd_gang_chain,
 	    sizeof (abd_t), offsetof(abd_t, abd_gang_link));
-	zfs_refcount_create(&abd->abd_children);
 	return (abd);
 }
 
@@ -515,8 +516,13 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 		ABD_LINEAR_BUF(abd) = (char *)ABD_LINEAR_BUF(sabd) + off;
 	} else if (abd_is_gang(sabd)) {
 		size_t left = size;
-		if (abd == NULL)
+		if (abd == NULL) {
 			abd = abd_alloc_gang_abd();
+		} else {
+			abd->abd_flags = ABD_FLAG_GANG;
+			list_create(&ABD_GANG(abd).abd_gang_chain,
+			    sizeof (abd_t), offsetof(abd_t, abd_gang_link));
+		}
 
 		abd->abd_flags &= ~ABD_FLAG_OWNER;
 		for (abd_t *cabd = abd_gang_get_offset(sabd, &off);
@@ -537,7 +543,6 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 
 	abd->abd_size = size;
 	abd->abd_parent = sabd;
-	zfs_refcount_create(&abd->abd_children);
 	(void) zfs_refcount_add_many(&sabd->abd_children, abd->abd_size, abd);
 	return (abd);
 }
@@ -557,6 +562,7 @@ abd_get_offset_struct(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 {
 	list_link_init(&abd->abd_gang_link);
 	mutex_init(&abd->abd_mtx, NULL, MUTEX_DEFAULT, NULL);
+	zfs_refcount_create(&abd->abd_children);
 	return (abd_get_offset_impl(abd, sabd, off, size));
 }
 
@@ -606,7 +612,6 @@ abd_get_from_buf(void *buf, size_t size)
 	abd->abd_flags = ABD_FLAG_LINEAR;
 	abd->abd_size = size;
 	abd->abd_parent = NULL;
-	zfs_refcount_create(&abd->abd_children);
 
 	ABD_LINEAR_BUF(abd) = buf;
 

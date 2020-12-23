@@ -138,33 +138,30 @@
 static void
 vdev_raidz_row_free(raidz_row_t *rr)
 {
-	int c;
+	for (int c = 0; c < rr->rr_firstdatacol && c < rr->rr_cols; c++) {
+		raidz_col_t *rc = &rr->rr_col[c];
+		abd_free(rc->rc_abd);
 
-	for (c = 0; c < rr->rr_firstdatacol && c < rr->rr_cols; c++) {
-		abd_free(rr->rr_col[c].rc_abd);
-
-		if (rr->rr_col[c].rc_gdata != NULL) {
-			abd_free(rr->rr_col[c].rc_gdata);
+		if (rc->rc_gdata != NULL) {
+			abd_free(rc->rc_gdata);
 		}
-		if (rr->rr_col[c].rc_orig_data != NULL) {
-			zio_buf_free(rr->rr_col[c].rc_orig_data,
-			    rr->rr_col[c].rc_size);
+		if (rc->rc_orig_data != NULL) {
+			zio_buf_free(rc->rc_orig_data, rc->rc_size);
 		}
 	}
-	for (c = rr->rr_firstdatacol; c < rr->rr_cols; c++) {
-		if (rr->rr_col[c].rc_size != 0) {
-			if (abd_is_gang(rr->rr_col[c].rc_abd)) {
-				abd_free(rr->rr_col[c].rc_abd);
-			} else if (rr->rr_col[c].rc_abd ==
-			    &rr->rr_col[c].rc_abdstruct) {
-				abd_put_struct(rr->rr_col[c].rc_abd);
+	for (int c = rr->rr_firstdatacol; c < rr->rr_cols; c++) {
+		raidz_col_t *rc = &rr->rr_col[c];
+		if (rc->rc_size != 0) {
+			if (rc->rc_abd == &rc->rc_abdstruct) {
+				abd_put_struct(rc->rc_abd);
+			} else if (abd_is_gang(rc->rc_abd)) {
+				abd_free(rc->rc_abd);
 			} else {
-				abd_put(rr->rr_col[c].rc_abd);
+				abd_put(rc->rc_abd);
 			}
 		}
-		if (rr->rr_col[c].rc_orig_data != NULL) {
-			zio_buf_free(rr->rr_col[c].rc_orig_data,
-			    rr->rr_col[c].rc_size);
+		if (rc->rc_orig_data != NULL) {
+			zio_buf_free(rc->rc_orig_data, rc->rc_size);
 		}
 	}
 

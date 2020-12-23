@@ -195,6 +195,7 @@ abd_alloc_struct(size_t size)
 	ASSERT3P(abd, !=, NULL);
 	list_link_init(&abd->abd_gang_link);
 	mutex_init(&abd->abd_mtx, NULL, MUTEX_DEFAULT, NULL);
+	zfs_refcount_create(&abd->abd_children);
 	ABDSTAT_INCR(abdstat_struct_size, sizeof (abd_t));
 
 	return (abd);
@@ -205,6 +206,7 @@ abd_free_struct(abd_t *abd)
 {
 	mutex_destroy(&abd->abd_mtx);
 	ASSERT(!list_link_active(&abd->abd_gang_link));
+	zfs_refcount_destroy(&abd->abd_children);
 	kmem_cache_free(abd_cache, abd);
 	ABDSTAT_INCR(abdstat_struct_size, -(int)sizeof (abd_t));
 }
@@ -479,7 +481,6 @@ abd_alloc_zero_scatter(void)
 	abd_zero_scatter->abd_size = SPA_MAXBLOCKSIZE;
 	abd_zero_scatter->abd_parent = NULL;
 	abd_zero_scatter->abd_flags |= ABD_FLAG_MULTI_CHUNK | ABD_FLAG_ZEROS;
-	zfs_refcount_create(&abd_zero_scatter->abd_children);
 
 	abd_for_each_sg(abd_zero_scatter, sg, nr_pages, i) {
 		sg_set_page(sg, abd_zero_page, PAGESIZE, 0);
@@ -678,7 +679,6 @@ abd_verify_scatter(abd_t *abd)
 static void
 abd_free_zero_scatter(void)
 {
-	zfs_refcount_destroy(&abd_zero_scatter->abd_children);
 	ABDSTAT_BUMPDOWN(abdstat_scatter_cnt);
 	ABDSTAT_INCR(abdstat_scatter_data_size, -(int)PAGESIZE);
 	ABDSTAT_BUMPDOWN(abdstat_scatter_page_multi_chunk);
@@ -747,7 +747,6 @@ abd_free_linear_page(abd_t *abd)
 	ABD_SCATTER(abd).abd_sgl = sg;
 	abd_free_chunks(abd);
 
-	zfs_refcount_destroy(&abd->abd_children);
 	abd_update_scatter_stats(abd, ABDSTAT_DECR);
 	abd_free_struct(abd);
 }
