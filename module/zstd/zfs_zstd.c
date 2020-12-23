@@ -247,13 +247,14 @@ zstd_mempool_reap(struct zstd_pool *zstd_mempool)
 static void *
 zstd_mempool_alloc(struct zstd_pool *zstd_mempool, size_t size)
 {
-	struct zstd_pool *pool;
 	struct zstd_kmem *mem = NULL;
 
 	if (!zstd_mempool) {
 		return (NULL);
 	}
 
+#if 0
+	struct zstd_pool *pool;
 	/* Seek for preallocated memory slot and free obsolete slots */
 	for (int i = 0; i < ZSTD_POOL_MAX; i++) {
 		pool = &zstd_mempool[i];
@@ -319,6 +320,7 @@ zstd_mempool_alloc(struct zstd_pool *zstd_mempool, size_t size)
 		}
 	}
 
+#endif
 	/*
 	 * If the pool is full or the allocation failed, try lazy allocation
 	 * instead.
