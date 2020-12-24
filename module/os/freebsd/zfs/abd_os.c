@@ -245,9 +245,8 @@ abd_alloc_zero_scatter(void)
 	abd_zero_buf = kmem_zalloc(zfs_abd_chunk_size, KM_SLEEP);
 	abd_zero_scatter = abd_alloc_struct(SPA_MAXBLOCKSIZE);
 
-	abd_zero_scatter->abd_flags = ABD_FLAG_OWNER | ABD_FLAG_ZEROS;
+	abd_zero_scatter->abd_flags |= ABD_FLAG_OWNER | ABD_FLAG_ZEROS;
 	abd_zero_scatter->abd_size = SPA_MAXBLOCKSIZE;
-	abd_zero_scatter->abd_parent = NULL;
 
 	ABD_SCATTER(abd_zero_scatter).abd_offset = 0;
 	ABD_SCATTER(abd_zero_scatter).abd_chunk_size =
@@ -376,7 +375,6 @@ abd_get_offset_scatter(abd_t *abd, abd_t *sabd, size_t off)
 	 * if we own the underlying data buffer, which is not true in
 	 * this case. Therefore, we don't ever use ABD_FLAG_META here.
 	 */
-	abd->abd_flags = 0;
 
 	ABD_SCATTER(abd).abd_offset = new_offset % zfs_abd_chunk_size;
 	ABD_SCATTER(abd).abd_chunk_size = zfs_abd_chunk_size;

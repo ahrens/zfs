@@ -468,12 +468,11 @@ abd_alloc_zero_scatter(void)
 	ASSERT3U(table.nents, ==, nr_pages);
 
 	abd_zero_scatter = abd_alloc_struct(SPA_MAXBLOCKSIZE);
-	abd_zero_scatter->abd_flags = ABD_FLAG_OWNER;
+	abd_zero_scatter->abd_flags |= ABD_FLAG_OWNER;
 	ABD_SCATTER(abd_zero_scatter).abd_offset = 0;
 	ABD_SCATTER(abd_zero_scatter).abd_sgl = table.sgl;
 	ABD_SCATTER(abd_zero_scatter).abd_nents = nr_pages;
 	abd_zero_scatter->abd_size = SPA_MAXBLOCKSIZE;
-	abd_zero_scatter->abd_parent = NULL;
 	abd_zero_scatter->abd_flags |= ABD_FLAG_MULTI_CHUNK | ABD_FLAG_ZEROS;
 
 	abd_for_each_sg(abd_zero_scatter, sg, nr_pages, i) {
@@ -594,12 +593,11 @@ abd_alloc_zero_scatter(void)
 	abd_zero_page = umem_alloc_aligned(PAGESIZE, 64, KM_SLEEP);
 	memset(abd_zero_page, 0, PAGESIZE);
 	abd_zero_scatter = abd_alloc_struct(SPA_MAXBLOCKSIZE);
-	abd_zero_scatter->abd_flags = ABD_FLAG_OWNER;
+	abd_zero_scatter->abd_flags |= ABD_FLAG_OWNER;
 	abd_zero_scatter->abd_flags |= ABD_FLAG_MULTI_CHUNK | ABD_FLAG_ZEROS;
 	ABD_SCATTER(abd_zero_scatter).abd_offset = 0;
 	ABD_SCATTER(abd_zero_scatter).abd_nents = nr_pages;
 	abd_zero_scatter->abd_size = SPA_MAXBLOCKSIZE;
-	abd_zero_scatter->abd_parent = NULL;
 	zfs_refcount_create(&abd_zero_scatter->abd_children);
 	ABD_SCATTER(abd_zero_scatter).abd_sgl = vmem_alloc(nr_pages *
 	    sizeof (struct scatterlist), KM_SLEEP);
@@ -781,7 +779,6 @@ abd_get_offset_scatter(abd_t *abd, abd_t *sabd, size_t off)
 	 * if we own the underlying data buffer, which is not true in
 	 * this case. Therefore, we don't ever use ABD_FLAG_META here.
 	 */
-	abd->abd_flags = 0;
 
 	abd_for_each_sg(sabd, sg, ABD_SCATTER(sabd).abd_nents, i) {
 		if (new_offset < sg->length)

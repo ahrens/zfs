@@ -48,6 +48,7 @@ typedef enum abd_flags {
 	ABD_FLAG_GANG		= 1 << 6, /* mult ABDs chained together */
 	ABD_FLAG_GANG_FREE	= 1 << 7, /* gang ABD is responsible for mem */
 	ABD_FLAG_ZEROS		= 1 << 8, /* ABD for zero-filled buffer */
+	ABD_FLAG_STRUCT		= 1 << 9, /* abd_t is caller-allocated */
 } abd_flags_t;
 
 struct abd {
@@ -94,8 +95,6 @@ abd_t *abd_alloc_for_io(size_t, boolean_t);
 abd_t *abd_alloc_sametype(abd_t *, size_t);
 void abd_gang_add(abd_t *, abd_t *, boolean_t);
 void abd_free(abd_t *);
-void abd_put(abd_t *);
-void abd_put_struct(abd_t *);
 abd_t *abd_get_offset(abd_t *, size_t);
 abd_t *abd_get_offset_size(abd_t *, size_t, size_t);
 abd_t *abd_get_offset_struct(abd_t *, abd_t *, size_t, size_t);
@@ -198,6 +197,15 @@ static inline uint_t
 abd_get_size(abd_t *abd)
 {
 	return (abd->abd_size);
+}
+
+/*
+ * Legacy function.
+ */
+static inline void
+abd_put(abd_t *abd)
+{
+	abd_free(abd);
 }
 
 /*

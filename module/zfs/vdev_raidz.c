@@ -151,15 +151,8 @@ vdev_raidz_row_free(raidz_row_t *rr)
 	}
 	for (int c = rr->rr_firstdatacol; c < rr->rr_cols; c++) {
 		raidz_col_t *rc = &rr->rr_col[c];
-		if (rc->rc_size != 0) {
-			if (rc->rc_abd == &rc->rc_abdstruct) {
-				abd_put_struct(rc->rc_abd);
-			} else if (abd_is_gang(rc->rc_abd)) {
-				abd_free(rc->rc_abd);
-			} else {
-				abd_put(rc->rc_abd);
-			}
-		}
+		if (rc->rc_size != 0)
+			abd_free(rc->rc_abd);
 		if (rc->rc_orig_data != NULL) {
 			zio_buf_free(rc->rc_orig_data, rc->rc_size);
 		}
@@ -345,11 +338,7 @@ vdev_raidz_cksum_report(zio_t *zio, zio_cksum_report_t *zcr, void *arg)
 
 			abd_copy(tmp, col->rc_abd, col->rc_size);
 
-			if (col->rc_abd == &col->rc_abdstruct) {
-				abd_put_struct(col->rc_abd);
-			} else {
-				abd_put(col->rc_abd);
-			}
+			abd_free(col->rc_abd);
 			col->rc_abd = tmp;
 
 			offset += col->rc_size;

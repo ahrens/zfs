@@ -852,14 +852,7 @@ vdev_draid_cksum_report(zio_t *zio, zio_cksum_report_t *zcr, void *arg)
 			    offset, col->rc_size);
 
 			abd_copy(tmp, col->rc_abd, col->rc_size);
-
-			if (col->rc_abd == &col->rc_abdstruct) {
-				abd_put_struct(col->rc_abd);
-			} else if (abd_is_gang(col->rc_abd)) {
-				abd_free(col->rc_abd);
-			} else {
-				abd_put(col->rc_abd);
-			}
+			abd_free(col->rc_abd);
 
 			col->rc_abd = tmp;
 			offset += col->rc_size;
