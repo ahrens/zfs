@@ -740,7 +740,6 @@ abd_free_linear_page(abd_t *abd)
 	abd_free_chunks(abd);
 
 	abd_update_scatter_stats(abd, ABDSTAT_DECR);
-	abd_free_struct(abd);
 }
 
 /*
