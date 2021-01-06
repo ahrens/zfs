@@ -90,7 +90,7 @@ extern int zfs_abd_scatter_enabled;
 
 abd_t *abd_alloc(size_t, boolean_t);
 abd_t *abd_alloc_linear(size_t, boolean_t);
-abd_t *abd_alloc_gang_abd(void);
+abd_t *abd_alloc_gang(void);
 abd_t *abd_alloc_for_io(size_t, boolean_t);
 abd_t *abd_alloc_sametype(abd_t *, size_t);
 void abd_gang_add(abd_t *, abd_t *, boolean_t);

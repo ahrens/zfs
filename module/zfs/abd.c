@@ -334,7 +334,7 @@ abd_alloc_sametype(abd_t *sabd, size_t size)
  * IO's. To free this abd, abd_free() must be called.
  */
 abd_t *
-abd_alloc_gang_abd(void)
+abd_alloc_gang(void)
 {
 	abd_t *abd = abd_alloc_struct(0);
 	abd->abd_flags |= ABD_FLAG_GANG | ABD_FLAG_OWNER;
@@ -479,9 +479,9 @@ abd_gang_get_offset(abd_t *abd, size_t *off)
 
 /*
  * Allocate a new ABD, using the provided struct (if non-NULL, and if
- * circumstances allow).  The returned ABD will point to offset off of sabd.
- * It shares the underlying buffer data with sabd. Use abd_put() to free.
- * sabd must not be freed while any derived ABDs exist.
+ * circumstances allow - otherwise allocate the struct).  The returned ABD will
+ * point to offset off of sabd. It shares the underlying buffer data with sabd.
+ * Use abd_free() to free.  sabd must not be freed while any derived ABDs exist.
  */
 static abd_t *
 abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
@@ -503,7 +503,7 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 	} else if (abd_is_gang(sabd)) {
 		size_t left = size;
 		if (abd == NULL) {
-			abd = abd_alloc_gang_abd();
+			abd = abd_alloc_gang();
 		} else {
 			abd->abd_flags |= ABD_FLAG_GANG;
 			list_create(&ABD_GANG(abd).abd_gang_chain,
@@ -540,8 +540,7 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
  * Usually, the provided abd is returned, but in some circumstances (FreeBSD,
  * if sabd is scatter and size is more than 2 pages) a new abd_t may need to
  * be allocated.  Therefore callers should be careful to use the returned
- * abd_t*, and when freeing, check if it is the same as the provided struct
- * before calling abd_put_struct().
+ * abd_t*.
  */
 abd_t *
 abd_get_offset_struct(abd_t *abd, abd_t *sabd, size_t off, size_t size)

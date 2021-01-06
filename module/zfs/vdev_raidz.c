@@ -138,24 +138,15 @@
 static void
 vdev_raidz_row_free(raidz_row_t *rr)
 {
-	for (int c = 0; c < rr->rr_firstdatacol && c < rr->rr_cols; c++) {
+	for (int c = 0; c < rr->rr_cols; c++) {
 		raidz_col_t *rc = &rr->rr_col[c];
-		abd_free(rc->rc_abd);
 
-		if (rc->rc_gdata != NULL) {
-			abd_free(rc->rc_gdata);
-		}
-		if (rc->rc_orig_data != NULL) {
-			zio_buf_free(rc->rc_orig_data, rc->rc_size);
-		}
-	}
-	for (int c = rr->rr_firstdatacol; c < rr->rr_cols; c++) {
-		raidz_col_t *rc = &rr->rr_col[c];
 		if (rc->rc_size != 0)
 			abd_free(rc->rc_abd);
-		if (rc->rc_orig_data != NULL) {
+		if (rc->rc_gdata != NULL)
+			abd_free(rc->rc_gdata);
+		if (rc->rc_orig_data != NULL)
 			zio_buf_free(rc->rc_orig_data, rc->rc_size);
-		}
 	}
 
 	if (rr->rr_abd_copy != NULL)
@@ -243,7 +234,7 @@ vdev_raidz_cksum_finish(zio_cksum_report_t *zcr, const abd_t *good_data)
 			/* fill in the data columns from good_data */
 			offset = 0;
 			for (; x < rr->rr_cols; x++) {
-				abd_put(rr->rr_col[x].rc_abd);
+				abd_free(rr->rr_col[x].rc_abd);
 
 				rr->rr_col[x].rc_abd =
 				    abd_get_offset_size((abd_t *)good_data,
@@ -262,7 +253,7 @@ vdev_raidz_cksum_finish(zio_cksum_report_t *zcr, const abd_t *good_data)
 
 			offset = 0;
 			for (x = rr->rr_firstdatacol; x < rr->rr_cols; x++) {
-				abd_put(rr->rr_col[x].rc_abd);
+				abd_free(rr->rr_col[x].rc_abd);
 				rr->rr_col[x].rc_abd = abd_get_offset_size(
 				    rr->rr_abd_copy, offset,
 				    rr->rr_col[x].rc_size);
@@ -285,7 +276,7 @@ vdev_raidz_cksum_finish(zio_cksum_report_t *zcr, const abd_t *good_data)
 
 	/* we drop the ereport if it ends up that the data was good */
 	zfs_ereport_finish_checksum(zcr, good, bad, B_TRUE);
-	abd_put((abd_t *)good);
+	abd_free((abd_t *)good);
 }
 
 /*
