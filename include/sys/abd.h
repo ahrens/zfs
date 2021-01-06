@@ -200,15 +200,6 @@ abd_get_size(abd_t *abd)
 }
 
 /*
- * Legacy function.
- */
-static inline void
-abd_put(abd_t *abd)
-{
-	abd_free(abd);
-}
-
-/*
  * Module lifecycle
  * Defined in each specific OS's abd_os.c
  */
