@@ -118,6 +118,7 @@ typedef struct raidz_col {
 	uint8_t rc_skipped;		/* Did we skip this I/O column? */
 	uint8_t rc_need_orig_restore;	/* need to restore from orig_data? */
 	uint8_t rc_repair;		/* Write good data to this column */
+	uint64_t rc_zio_offset;		/* abd offset inside parent zio abd */
 	int rc_shadow_devidx;		/* for double write */
 	int rc_shadow_error;		/* for double write */
 	uint64_t rc_shadow_offset;	/* for double write */
@@ -150,7 +151,10 @@ typedef struct raidz_map {
 	int rm_nskip;			/* RAIDZ sectors skipped for padding */
 	int rm_skipstart;		/* Column index of padding start */
 	int rm_original_width;		/* pre-expansion width of raidz vdev */
+	int rm_logical_width;		/* logical width computed for map */
 	int rm_nphys_cols;		/* Number of leaf devices */
+	uint64_t rm_roffp;		/* Reflow offset phys used by map */
+	uint64_t rm_roff;		/* Reflow offset used by map */
 	zfs_locked_range_t *rm_lr;
 	const raidz_impl_ops_t *rm_ops;	/* RAIDZ math operations */
 	raidz_col_t *rm_phys_col;	/* leaf devices array */

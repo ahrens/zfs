@@ -45,6 +45,12 @@
 
 #ifdef ZFS_DEBUG
 #include <sys/vdev.h>	/* For vdev_xlate() in vdev_raidz_io_verify() */
+
+#ifndef _KERNEL
+#include <zlib.h>
+#else
+#include <linux/crc32.h>
+#endif
 #endif
 
 /*
@@ -386,6 +392,62 @@ vdev_raidz_cksum_report(zio_t *zio, zio_cksum_report_t *zcr, void *arg)
 	}
 }
 
+#ifdef ZFS_DEBUG
+static uint32_t
+abd_get_crc32(abd_t *abd, size_t size)
+{
+	uint32_t crc;
+
+	char *buf = kmem_alloc(size, KM_SLEEP);
+	abd_copy_to_buf(buf, abd, size);
+	crc = crc32(0, (const void*)buf, size);
+	kmem_free(buf, size);
+
+	return (crc);
+}
+#endif
+
+static void
+vdev_raidz_dbgmsg_map(zio_t *zio, raidz_map_t *rm)
+{
+#ifdef ZFS_DEBUG
+	zfs_dbgmsg("MAP:%c:zio=%llx:rm=%llx:blkid=%lx,off=%lx,sz=%lx,\
+ow=%lx,lw=%lx,pw=%lx,txg=%ld,roffp=%lx,roff=%lx,crc=%x",
+	    zio->io_type == ZIO_TYPE_READ ? 'r' : 'w',
+	    zio, rm,
+	    zio->io_bookmark.zb_blkid,
+	    zio->io_offset, zio->io_size,
+	    rm->rm_original_width,
+	    rm->rm_logical_width,
+	    rm->rm_nphys_cols,
+	    BP_PHYSICAL_BIRTH(zio->io_bp),
+	    rm->rm_roffp,
+	    rm->rm_roff,
+	    abd_get_crc32(zio->io_abd, zio->io_size));
+
+	for (int row = 0; row < rm->rm_nrows; row++) {
+		raidz_row_t *rr = rm->rm_row[row];
+		zfs_dbgmsg("zio=%llx:rm=%llx:row %ld", zio, rm, row);
+		for (int c = 0; c < rr->rr_cols; c++) {
+			raidz_col_t *rc = &rr->rr_col[c];
+			uint32_t crc = 0;
+
+			if (rc->rc_size)
+				crc = abd_get_crc32(rc->rc_abd, rc->rc_size);
+
+			zfs_dbgmsg("zio=%llx:rm=%llx:col %d: \
+ziooff=%lx,off=%lx,sz=%lx,idx=%ld,shad_off=%lx,shad_idx=%ld,err=%d,crc=%x",
+			    zio, rm, c,
+			    rc->rc_zio_offset, rc->rc_offset, rc->rc_size,
+			    rc->rc_devidx,
+			    rc->rc_shadow_offset,
+			    rc->rc_shadow_devidx,
+			    rc->rc_error, crc);
+		}
+	}
+#endif
+}
+
 static const zio_vsd_ops_t vdev_raidz_vsd_ops = {
 	.vsd_free = vdev_raidz_map_free_vsd,
 	.vsd_cksum_report = vdev_raidz_cksum_report
@@ -605,6 +667,9 @@ vdev_raidz_map_alloc_expanded(zio_t *zio,
 	    KM_SLEEP);
 	rm->rm_nrows = rows;
 	rm->rm_nskip = roundup(tot, nparity + 1) - tot;
+	rm->rm_logical_width = logical_cols;
+	rm->rm_roffp = reflow_offset_synced;
+	rm->rm_roff = reflow_offset_next;
 	asize = 0;
 
 #if 1
@@ -723,9 +788,10 @@ vdev_raidz_map_alloc_expanded(zio_t *zio,
 				    (int)child_id, child_offset,
 				    (int)row_phys_cols);
 #endif
+				rc->rc_zio_offset = off << ashift;
 				rc->rc_size = 1ULL << ashift;
 				rc->rc_abd = abd_get_offset_struct(
-				    &rc->rc_abdstruct, abd, off << ashift,
+				    &rc->rc_abdstruct, abd, rc->rc_zio_offset,
 				    rc->rc_size);
 			}
 
@@ -900,6 +966,7 @@ vdev_raidz_map_alloc_expanded(zio_t *zio,
 				rc->rc_abd =
 				    abd_alloc_linear(rc->rc_size,
 				    B_TRUE);
+				rc->rc_zio_offset = -1;
 			}
 		}
 	}
@@ -2458,6 +2525,9 @@ vdev_raidz_io_start(zio_t *zio)
 		vdev_raidz_io_start_read(zio, rm);
 	}
 
+	if (zio->io_type == ZIO_TYPE_WRITE)
+		vdev_raidz_dbgmsg_map(zio, rm);
+
 	zio_execute(zio);
 }
 
@@ -3363,6 +3433,8 @@ vdev_raidz_io_done(zio_t *zio)
 			if (zio->io_error == ECKSUM &&
 			    !(zio->io_flags & ZIO_FLAG_SPECULATIVE)) {
 				vdev_raidz_io_done_unrecoverable(zio);
+				vdev_raidz_dbgmsg_map(zio, rm);
+
 			}
 		}
 	}
