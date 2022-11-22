@@ -3945,7 +3945,7 @@ metaslab_sync(metaslab_t *msp, uint64_t txg)
 	 * This metaslab has just been added so there's no work to do now.
 	 */
 	if (msp->ms_new) {
-		ASSERT0(range_tree_space(alloctree));
+		ASSERT0(range_tree_space(alloctree)); // <-
 		ASSERT0(range_tree_space(msp->ms_freeing));
 		ASSERT0(range_tree_space(msp->ms_freed));
 		ASSERT0(range_tree_space(msp->ms_checkpointing));
@@ -4785,7 +4785,7 @@ metaslab_group_alloc_normal(metaslab_group_t *mg, zio_alloc_list_t *zal,
 			ASSERT(msp->ms_loaded);
 
 			was_active = B_TRUE;
-			ASSERT(msp->ms_weight & METASLAB_ACTIVE_MASK);
+			ASSERT(msp->ms_weight & METASLAB_ACTIVE_MASK); // <-
 		} else if (activation_weight == METASLAB_WEIGHT_SECONDARY &&
 		    mga->mga_secondary != NULL) {
 			msp = mga->mga_secondary;
@@ -4799,7 +4799,7 @@ metaslab_group_alloc_normal(metaslab_group_t *mg, zio_alloc_list_t *zal,
 			ASSERT(msp->ms_loaded);
 
 			was_active = B_TRUE;
-			ASSERT(msp->ms_weight & METASLAB_ACTIVE_MASK);
+			ASSERT(msp->ms_weight & METASLAB_ACTIVE_MASK);  // <-
 		} else {
 			msp = find_valid_metaslab(mg, activation_weight, dva, d,
 			    want_unique, asize, allocator, try_hard, zal,
