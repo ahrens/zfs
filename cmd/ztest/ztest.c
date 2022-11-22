@@ -474,7 +474,7 @@ ztest_info_t ztest_info[] = {
 	ZTI_INIT(ztest_scrub, 1, &zopt_rarely, B_FALSE),
 	ZTI_INIT(ztest_spa_upgrade, 1, &zopt_rarely, B_FALSE),
 	ZTI_INIT(ztest_dsl_dataset_promote_busy, 1, &zopt_rarely, B_FALSE),
-	ZTI_INIT(ztest_vdev_attach_detach, 1, &zopt_sometimes, B_FALSE),
+	ZTI_INIT(ztest_vdev_attach_detach, 1, &zopt_sometimes, B_TRUE),
 	ZTI_INIT(ztest_vdev_raidz_attach, 1, &zopt_sometimes, B_TRUE),
 	ZTI_INIT(ztest_vdev_LUN_growth, 1, &zopt_rarely, B_FALSE),
 	ZTI_INIT(ztest_vdev_add_remove, 1, &ztest_opts.zo_vdevtime, B_FALSE),
