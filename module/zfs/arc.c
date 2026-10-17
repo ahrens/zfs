@@ -1862,7 +1862,8 @@ arc_hdr_authenticate(arc_buf_hdr_t *hdr, spa_t *spa, uint64_t dsobj)
 		ASSERT3U(HDR_GET_COMPRESS(hdr), ==, ZIO_COMPRESS_OFF);
 		ASSERT3U(lsize, ==, psize);
 		ret = spa_do_crypt_objset_mac_abd(B_FALSE, spa, dsobj, abd,
-		    psize, hdr->b_l1hdr.b_byteswap != DMU_BSWAP_NUMFUNCS);
+		    psize, hdr->b_l1hdr.b_byteswap != DMU_BSWAP_NUMFUNCS,
+		    B_TRUE);
 	} else {
 		ret = spa_do_crypt_mac_abd(B_FALSE, spa, dsobj, abd, psize,
 		    hdr->b_crypt_hdr.b_mac);

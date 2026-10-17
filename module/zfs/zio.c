@@ -631,7 +631,8 @@ zio_decrypt(zio_t *zio, abd_t *data, uint64_t size)
 	if (BP_IS_AUTHENTICATED(bp)) {
 		if (ot == DMU_OT_OBJSET) {
 			ret = spa_do_crypt_objset_mac_abd(B_FALSE, spa,
-			    dsobj, zio->io_abd, size, BP_SHOULD_BYTESWAP(bp));
+			    dsobj, zio->io_abd, size, BP_SHOULD_BYTESWAP(bp),
+			    B_TRUE);
 		} else {
 			zio_crypt_decode_mac_bp(bp, mac);
 			ret = spa_do_crypt_mac_abd(B_FALSE, spa, dsobj,
@@ -5584,7 +5585,8 @@ zio_encrypt(zio_t *zio)
 		ASSERT3U(BP_GET_COMPRESS(bp), ==, ZIO_COMPRESS_OFF);
 		BP_SET_CRYPT(bp, B_TRUE);
 		VERIFY0(spa_do_crypt_objset_mac_abd(B_TRUE, spa, dsobj,
-		    zio->io_abd, psize, BP_SHOULD_BYTESWAP(bp)));
+		    zio->io_abd, psize, BP_SHOULD_BYTESWAP(bp),
+		    zp->zp_local_mac_has_project));
 		return (zio);
 	}
 

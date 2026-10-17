@@ -1672,6 +1672,19 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 		arc_convert_to_raw(os->os_phys_buf,
 		    os->os_dsl_dataset->ds_object, ZFS_HOST_BYTEORDER,
 		    DMU_OT_OBJSET, NULL, NULL, NULL);
+	} else if (os->os_encrypted) {
+		/*
+		 * Before os_phys is modified, determine if the local MAC
+		 * includes os_projectused_dnode.
+		 */
+		if (!os->os_local_mac_known) {
+			os->os_local_mac_has_project =
+			    spa_crypt_objset_local_mac_has_project(os->os_spa,
+			    os->os_dsl_dataset->ds_object, os->os_phys,
+			    arc_buf_size(os->os_phys_buf));
+			os->os_local_mac_known = B_TRUE;
+		}
+		zp.zp_local_mac_has_project = os->os_local_mac_has_project;
 	}
 
 	zio = arc_write(pio, os->os_spa, tx->tx_txg,

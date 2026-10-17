@@ -161,6 +161,15 @@ typedef struct spa_keystore {
 	avl_tree_t sk_wkeys;
 } spa_keystore_t;
 
+/* the form of an objset's local MAC (see zio_crypt_do_objset_hmacs()) */
+typedef enum objset_local_mac_form {
+	OLM_ZEROED,	/* all zeros */
+	OLM_PROJECT,	/* matches only the with-project form */
+	OLM_NO_PROJECT,	/* matches only the without-project form */
+	OLM_EITHER,	/* matches both forms, which are the same */
+	OLM_NEITHER	/* matches neither form */
+} objset_local_mac_form_t;
+
 int dsl_crypto_params_create_nvlist(dcp_cmd_t cmd, nvlist_t *props,
     nvlist_t *crypto_args, dsl_crypto_params_t **dcp_out);
 void dsl_crypto_params_free(dsl_crypto_params_t *dcp, boolean_t unload);
@@ -216,7 +225,11 @@ int spa_crypt_get_salt(spa_t *spa, uint64_t dsobj, uint8_t *salt);
 int spa_do_crypt_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
     abd_t *abd, uint_t datalen, uint8_t *mac);
 int spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
-    abd_t *abd, uint_t datalen, boolean_t byteswap);
+    abd_t *abd, uint_t datalen, boolean_t byteswap, boolean_t project);
+int spa_crypt_objset_local_mac_form(spa_t *spa, uint64_t dsobj, void *buf,
+    uint_t datalen, objset_local_mac_form_t *formp);
+boolean_t spa_crypt_objset_local_mac_has_project(spa_t *spa, uint64_t dsobj,
+    void *buf, uint_t datalen);
 int spa_do_crypt_abd(boolean_t encrypt, spa_t *spa, const zbookmark_phys_t *zb,
     dmu_object_type_t ot, boolean_t dedup, boolean_t bswap, uint8_t *salt,
     uint8_t *iv, uint8_t *mac, uint_t datalen, abd_t *pabd, abd_t *cabd,

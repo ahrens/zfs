@@ -77,6 +77,13 @@
  */
 int zfs_disable_ivset_guid_check = 0;
 
+/*
+ * The form of local MAC to write for encrypted datasets that don't already
+ * have one form or the other: with project accounting (1), or without it (0),
+ * which illumos ZFS writes and can verify.
+ */
+int zfs_crypt_local_mac_has_project = 1;
+
 static void
 dsl_wrapping_key_hold(dsl_wrapping_key_t *wkey, const void *tag)
 {
@@ -2251,13 +2258,15 @@ dsl_crypto_recv_raw_objset_sync(dsl_dataset_t *ds, dmu_objset_type_t ostype,
 	/*
 	 * Set the portable MAC. The local MAC will always be zero since the
 	 * incoming data will all be portable and user accounting will be
-	 * deferred until the next mount. Afterwards, flag the os to be
-	 * written out raw next time.
+	 * deferred until the next mount. That leaves no sign of the local
+	 * MAC's form, so the next non-raw write decides it again. Afterwards,
+	 * flag the os to be written out raw next time.
 	 */
 	arc_release(os->os_phys_buf, &os->os_phys_buf);
 	memcpy(os->os_phys->os_portable_mac, portable_mac, ZIO_OBJSET_MAC_LEN);
 	memset(os->os_phys->os_local_mac, 0, ZIO_OBJSET_MAC_LEN);
 	os->os_flags &= ~OBJSET_FLAG_USERACCOUNTING_COMPLETE;
+	os->os_local_mac_known = B_FALSE;
 	os->os_next_write_raw[tx->tx_txg & TXG_MASK] = B_TRUE;
 
 	/* set metadnode compression and checksum */
@@ -2815,11 +2824,13 @@ spa_crypt_get_salt(spa_t *spa, uint64_t dsobj, uint8_t *salt)
  * Objset blocks are a special case for MAC generation. These blocks have 2
  * 256-bit MACs which are embedded within the block itself, rather than a
  * single 128 bit MAC. As a result, this function handles encoding and decoding
- * the MACs on its own, unlike other functions in this file.
+ * the MACs on its own, unlike other functions in this file. When generating,
+ * "project" selects the form of the local MAC (see
+ * zio_crypt_do_objset_hmacs()); verification accepts either form.
  */
 int
 spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
-    abd_t *abd, uint_t datalen, boolean_t byteswap)
+    abd_t *abd, uint_t datalen, boolean_t byteswap, boolean_t project)
 {
 	int ret;
 	dsl_crypto_key_t *dck;
@@ -2837,25 +2848,23 @@ spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
 
 	/* calculate both HMACs */
 	ret = zio_crypt_do_objset_hmacs(&dck->dck_key, buf, datalen,
-	    byteswap, portable_mac, local_mac);
-	spa_keystore_dsl_key_rele(spa, dck, FTAG);
-	if (ret != 0) {
-		abd_return_buf(abd, buf, datalen);
-		return (ret);
-	}
+	    byteswap, !generate || project, portable_mac, local_mac);
+	if (ret != 0)
+		goto out;
 
 	/* if we are generating encode the HMACs in the objset_phys_t */
 	if (generate) {
 		memcpy(osp->os_portable_mac, portable_mac, ZIO_OBJSET_MAC_LEN);
 		memcpy(osp->os_local_mac, local_mac, ZIO_OBJSET_MAC_LEN);
+		spa_keystore_dsl_key_rele(spa, dck, FTAG);
 		abd_return_buf_copy(abd, buf, datalen);
 		return (0);
 	}
 
 	if (memcmp(portable_mac, osp->os_portable_mac,
 	    ZIO_OBJSET_MAC_LEN) != 0) {
-		abd_return_buf(abd, buf, datalen);
-		return (SET_ERROR(ECKSUM));
+		ret = SET_ERROR(ECKSUM);
+		goto out;
 	}
 	if (memcmp(local_mac, osp->os_local_mac, ZIO_OBJSET_MAC_LEN) != 0) {
 		/*
@@ -2869,14 +2878,96 @@ spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
 		 * special-casing noticing that it's zero will handle it
 		 * elsewhere, since we can just regenerate it.
 		 */
-		if (memcmp(local_mac, zeroed_mac, ZIO_OBJSET_MAC_LEN) != 0) {
-			abd_return_buf(abd, buf, datalen);
-			return (SET_ERROR(ECKSUM));
-		}
+		if (memcmp(local_mac, zeroed_mac, ZIO_OBJSET_MAC_LEN) == 0)
+			goto out;
+
+		ret = zio_crypt_do_objset_hmacs(&dck->dck_key, buf, datalen,
+		    byteswap, B_FALSE, portable_mac, local_mac);
+		if (ret == 0 && memcmp(local_mac, osp->os_local_mac,
+		    ZIO_OBJSET_MAC_LEN) != 0)
+			ret = SET_ERROR(ECKSUM);
 	}
 
+out:
+	spa_keystore_dsl_key_rele(spa, dck, FTAG);
 	abd_return_buf(abd, buf, datalen);
+	return (ret);
+}
+
+/*
+ * Determine the form of the local MAC of the objset in buf, the host-endian
+ * version last written or read. The forms can only be told apart with the
+ * key, unless the MAC is zeroed.
+ */
+int
+spa_crypt_objset_local_mac_form(spa_t *spa, uint64_t dsobj, void *buf,
+    uint_t datalen, objset_local_mac_form_t *formp)
+{
+	dsl_crypto_key_t *dck;
+	objset_phys_t *osp = buf;
+	uint8_t portable_mac[ZIO_OBJSET_MAC_LEN];
+	uint8_t with_mac[ZIO_OBJSET_MAC_LEN];
+	uint8_t without_mac[ZIO_OBJSET_MAC_LEN];
+	const uint8_t zeroed_mac[ZIO_OBJSET_MAC_LEN] = {0};
+	int ret;
+
+	if (memcmp(osp->os_local_mac, zeroed_mac, ZIO_OBJSET_MAC_LEN) == 0) {
+		*formp = OLM_ZEROED;
+		return (0);
+	}
+
+	ret = spa_keystore_lookup_key(spa, dsobj, FTAG, &dck);
+	if (ret != 0)
+		return (ret);
+
+	ret = zio_crypt_do_objset_hmacs(&dck->dck_key, buf, datalen, B_FALSE,
+	    B_TRUE, portable_mac, with_mac);
+	if (ret == 0) {
+		ret = zio_crypt_do_objset_hmacs(&dck->dck_key, buf, datalen,
+		    B_FALSE, B_FALSE, portable_mac, without_mac);
+	}
+	spa_keystore_dsl_key_rele(spa, dck, FTAG);
+	if (ret != 0)
+		return (ret);
+
+	boolean_t with = (memcmp(with_mac, osp->os_local_mac,
+	    ZIO_OBJSET_MAC_LEN) == 0);
+	boolean_t without = (memcmp(without_mac, osp->os_local_mac,
+	    ZIO_OBJSET_MAC_LEN) == 0);
+
+	if (with && without)
+		*formp = OLM_EITHER;
+	else if (with)
+		*formp = OLM_PROJECT;
+	else if (without)
+		*formp = OLM_NO_PROJECT;
+	else
+		*formp = OLM_NEITHER;
 	return (0);
+}
+
+/*
+ * Return whether to include os_projectused_dnode in the local MAC of the
+ * objset in buf, which is the host-endian version last written or read. Keep
+ * the form it has, so that the software that wrote it can still read it. If
+ * it gives no sign of either, because the MAC is zeroed or the two forms are
+ * the same, use the form set by zfs_crypt_local_mac_has_project.
+ */
+boolean_t
+spa_crypt_objset_local_mac_has_project(spa_t *spa, uint64_t dsobj, void *buf,
+    uint_t datalen)
+{
+	objset_local_mac_form_t form;
+
+	if (spa_crypt_objset_local_mac_form(spa, dsobj, buf, datalen,
+	    &form) == 0 && (form == OLM_PROJECT || form == OLM_NO_PROJECT)) {
+		zfs_dbgmsg("objset %llu has a local MAC %s project accounting",
+		    (u_longlong_t)dsobj, form == OLM_PROJECT ?
+		    "with" : "without");
+		return (form == OLM_PROJECT);
+	}
+
+	return (zfs_crypt_local_mac_has_project != 0);
 }
 
 int
@@ -3020,3 +3111,6 @@ error:
 
 ZFS_MODULE_PARAM(zfs, zfs_, disable_ivset_guid_check, INT, ZMOD_RW,
 	"Set to allow raw receives without IVset guids");
+
+ZFS_MODULE_PARAM(zfs, zfs_, crypt_local_mac_has_project, INT, ZMOD_RW,
+	"Protect project accounting in new encrypted datasets' local MAC");
