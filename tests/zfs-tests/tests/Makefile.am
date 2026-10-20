@@ -719,6 +719,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zdb/zdb_decompress_zstd.ksh \
 	functional/cli_root/zdb/zdb_display_block.ksh \
 	functional/cli_root/zdb/zdb_encrypted.ksh \
+	functional/cli_root/zdb/zdb_encrypted_local_mac.ksh \
 	functional/cli_root/zdb/zdb_encrypted_raw.ksh \
 	functional/cli_root/zdb/zdb_label_checksum.ksh \
 	functional/cli_root/zdb/zdb_file_layout_001.ksh \

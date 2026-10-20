@@ -4796,6 +4796,43 @@ out:
 	return (rc);
 }
 
+/*
+ * Report the form of an encrypted objset's local MAC, which protects its
+ * space accounting. Telling the forms apart takes the key.
+ */
+static void
+dump_objset_local_mac(objset_t *os)
+{
+	objset_local_mac_form_t form;
+	const char *desc = "unknown";
+
+	if (spa_crypt_objset_local_mac_form(os->os_spa, dmu_objset_id(os),
+	    os->os_phys, arc_buf_size(os->os_phys_buf), &form) != 0) {
+		(void) printf("    Local MAC: set (load the key with -K to "
+		    "show its form)\n");
+		return;
+	}
+
+	switch (form) {
+	case OLM_ZEROED:
+		desc = "zeroed";
+		break;
+	case OLM_PROJECT:
+		desc = "with project accounting";
+		break;
+	case OLM_NO_PROJECT:
+		desc = "without project accounting";
+		break;
+	case OLM_EITHER:
+		desc = "the same with or without project accounting";
+		break;
+	case OLM_NEITHER:
+		desc = "matches neither form";
+		break;
+	}
+	(void) printf("    Local MAC: %s\n", desc);
+}
+
 static void
 dump_objset(objset_t *os)
 {
@@ -4858,6 +4895,9 @@ dump_objset(objset_t *os)
 	    (u_longlong_t)dds.dds_creation_txg,
 	    numbuf, (u_longlong_t)usedobjs, blkbuf,
 	    (dds.dds_inconsistent) ? " (inconsistent)" : "");
+
+	if (os->os_encrypted)
+		dump_objset_local_mac(os);
 
 	for (i = 0; i < zopt_object_args; i++) {
 		obj_start = zopt_object_ranges[i].zor_obj_start;
