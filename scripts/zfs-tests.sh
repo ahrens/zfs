@@ -491,6 +491,7 @@ OPTIONS:
 	-q          Quiet test-runner output
 	-D          Debug; show all test output immediately (noisy)
 	-x          Remove all testpools, dm, lo, and files (unsafe)
+	-p          Skip the pre-flight check and the per-test leak check
 	-k          Disable cleanup after test failure
 	-K          Log test names to /dev/kmsg
 	-f          Use files only, disables block device tests
@@ -533,7 +534,7 @@ $0 -x
 EOF
 }
 
-while getopts 'hvqxkKfScRmOn:d:Ds:r:?t:T:u:I:' OPTION; do
+while getopts 'hvqxkKfScRmOn:d:Ds:r:?t:T:u:I:p' OPTION; do
 	case $OPTION in
 	h)
 		usage
@@ -547,6 +548,9 @@ while getopts 'hvqxkKfScRmOn:d:Ds:r:?t:T:u:I:' OPTION; do
 		;;
 	x)
 		CLEANUPALL="yes"
+		;;
+	p)
+		HYGIENE="no"
 		;;
 	k)
 		CLEANUP="no"
@@ -755,6 +759,19 @@ if [ "$CLEANUPALL" = "yes" ]; then
 fi
 
 #
+# Clean up what an earlier run left behind (pools on DISKS or test files,
+# disk labels, tunables, zinject handlers, test users, ...), and refuse to
+# run if something is left that the suite does not own.
+#
+HYGIENE_SCRIPT="$STF_SUITE/callbacks/zfs_hygiene.ksh"
+if [ "$HYGIENE" != "no" ]; then
+	sudo -E env DISKS="$DISKS" KEEP="$KEEP" FILEDIR="$FILEDIR" \
+	    STF_SUITE="$STF_SUITE" STF_PATH="$STF_PATH" \
+	    "$HYGIENE_SCRIPT" preflight ||
+	    fail "Pre-flight check failed; run with -p to skip it."
+fi
+
+#
 # By default preserve any existing pools
 #
 if [ -z "${KEEP}" ]; then
@@ -897,6 +914,8 @@ mktemp_file() {
 }
 mkdir -p "$FILEDIR" || :
 RESULTS_FILE=$(mktemp_file zts-results)
+[ "$HYGIENE" != "no" ] && HYGIENE_ARGS="-L $HYGIENE_SCRIPT"
+
 REPORT_FILE=$(mktemp_file zts-report)
 
 #
@@ -904,6 +923,7 @@ REPORT_FILE=$(mktemp_file zts-report)
 #
 msg "${TEST_RUNNER}" \
     "${QUIET:+-q}" \
+    "${HYGIENE_ARGS}" \
     "${DEBUG:+-D}" \
     "${KMEMLEAK:+-m}" \
     "${KMSG:+-K}" \
@@ -915,6 +935,7 @@ msg "${TEST_RUNNER}" \
 { PATH=$STF_PATH \
     ${TEST_RUNNER} \
     ${QUIET:+-q} \
+    ${HYGIENE_ARGS} \
     ${DEBUG:+-D} \
     ${KMEMLEAK:+-m} \
     ${KMSG:+-K} \
@@ -945,6 +966,7 @@ if [ "$RESULT" -eq "2" ] && [ -n "$RERUN" ]; then
 	{ PATH=$STF_PATH \
 	    ${TEST_RUNNER} \
 	        ${QUIET:+-q} \
+	        ${HYGIENE_ARGS} \
 	        ${DEBUG:+-D} \
 	        ${KMEMLEAK:+-m} \
 	    -c "${RUNFILES}" \

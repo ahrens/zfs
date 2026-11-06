@@ -36,6 +36,7 @@ from subprocess import PIPE
 from subprocess import Popen
 from subprocess import check_output
 from subprocess import run
+from subprocess import TimeoutExpired
 from threading import Timer
 from time import time, CLOCK_MONOTONIC
 from os.path import exists
@@ -50,6 +51,7 @@ LOG_FILE = 'LOG_FILE'
 LOG_OUT = 'LOG_OUT'
 LOG_ERR = 'LOG_ERR'
 LOG_FILE_OBJ = None
+LEAKS_FILE = 'leaks'
 
 try:
     from time import monotonic as monotonic_time
@@ -174,6 +176,7 @@ class Cmd(object):
         self.user = user or ''
         self.killed = False
         self.reran = None
+        self.sid = None
         self.result = Result()
 
         if self.timeout is None:
@@ -254,7 +257,8 @@ echo "##### /proc/sysrq-trigger stack #####"
         do_sudo = len(self.user) != 0
         signal = '-TERM'
 
-        cmd = [SUDO, KILL, signal, str(proc.pid)]
+        # The test runs in a session of its own; signal its process group.
+        cmd = [SUDO, KILL, signal, '--', '-%d' % proc.pid]
         if not do_sudo:
             del cmd[0]
 
@@ -380,7 +384,10 @@ echo "##### /proc/sysrq-trigger stack #####"
             cmd = f'{SUDO} sh -c "echo clear > {KMEMLEAK_FILE}"'
             check_output(cmd, shell=True)
 
-        proc = Popen(privcmd, stdout=PIPE, stderr=PIPE)
+        # A session of its own, so that the leak check (-L) can find the
+        # processes the test leaves behind.
+        proc = Popen(privcmd, stdout=PIPE, stderr=PIPE, start_new_session=True)
+        self.sid = proc.pid
         # Allow a special timeout value of 0 to mean infinity
         if int(self.timeout) == 0:
             self.timeout = sys.maxsize / (10 ** 9)
@@ -567,11 +574,13 @@ Tags: %s
                        timeout=self.timeout, user=self.post_user)
 
         cont = True
+        leakcheck(options, LEAKS_GROUP, self.pathname, start=True)
         if len(pretest.pathname):
             pretest.run(options, kmemleak=False)
             cont = pretest.result.result == 'PASS'
             pretest.log(options)
 
+        leakcheck(options, LEAKS_TEST, self.pathname, start=True)
         if cont:
             test.run(options, kmemleak=kmemleak)
             if test.result.result == 'KILLED' and len(failsafe.pathname):
@@ -581,10 +590,12 @@ Tags: %s
             test.skip()
 
         test.log(options)
+        leakcheck(options, LEAKS_TEST, test.pathname, sid=test.sid)
 
         if len(posttest.pathname):
             posttest.run(options, kmemleak=False)
             posttest.log(options)
+        leakcheck(options, LEAKS_GROUP, posttest.pathname or self.pathname)
 
 
 class TestGroup(Test):
@@ -678,11 +689,13 @@ Tags: %s
                        user=self.post_user, identifier=self.identifier)
 
         cont = True
+        leakcheck(options, LEAKS_GROUP, self.pathname, start=True)
         if len(pretest.pathname):
             pretest.run(options, dryrun=dryrun, kmemleak=False)
             cont = pretest.result.result == 'PASS'
             pretest.log(options)
 
+        leakcheck(options, LEAKS_TEST, self.pathname, start=True)
         for fname in self.tests:
             odir = os.path.join(self.outputdir, fname)
             test = Cmd(os.path.join(self.pathname, fname), outputdir=odir,
@@ -700,10 +713,12 @@ Tags: %s
                 test.skip()
 
             test.log(options)
+            leakcheck(options, LEAKS_TEST, test.pathname, sid=test.sid)
 
         if len(posttest.pathname):
             posttest.run(options, dryrun=dryrun, kmemleak=False)
             posttest.log(options)
+        leakcheck(options, LEAKS_GROUP, posttest.pathname or self.pathname)
 
 
 class TestRun(object):
@@ -1029,6 +1044,9 @@ class TestRun(object):
         print('Percent passed:\t%.1f%%' % ((float(Result.runresults['PASS']) /
                                             float(Result.total)) * 100))
         print('Log directory:\t%s' % self.outputdir)
+        if Leaks.found:
+            print('Leaked state:\t%d (see %s)' % (len(Leaks.found),
+                  os.path.join(self.outputdir, LEAKS_FILE)))
 
         if Result.runresults['FAIL'] > 0:
             return 1
@@ -1057,6 +1075,63 @@ def write_log(msg, target):
         os.write(LOG_FILE_OBJ.fileno(), msg)
     else:
         fail('log_msg called with unknown target "%s"' % target)
+
+
+class Leaks(object):
+    # Tests, setup and cleanup scripts that leaked state.
+    found = set()
+
+
+LEAKS_GROUP = '.leakcheck-group'
+LEAKS_TEST = '.leakcheck-test'
+
+
+def leakcheck(options, statefile, label, start=False, sid=None):
+    """
+    Run the leak check script (-L) as root after a test, setup or cleanup
+    script.  It compares things that tests must leave as they were (pools,
+    tunables, zinject handlers, ...) with the state it saved in statefile,
+    undoes the changes that are safe to undo, and saves the current state.
+    Log each change it reports with the name of the script that made it.
+    With start, only save the state.  With sid (a test), also report the
+    processes the test left running in its session, and pass the group's
+    statefile.
+    """
+    if not options.leakcheck or options.dryrun:
+        return
+    if start and os.path.exists(statefile):
+        os.unlink(statefile)
+    cmd = [SUDO, '-E', options.leakcheck, 'check', statefile, label]
+    if sid:
+        cmd += [str(sid), LEAKS_GROUP]
+    try:
+        p = Popen(cmd, stdout=PIPE, start_new_session=True)
+        try:
+            out = p.communicate(timeout=600)[0]
+        except TimeoutExpired:
+            # Kill the script and what it started.  A command stuck in
+            # the kernel can't be killed and keeps the pipe open, so
+            # don't wait long for it.
+            Popen([SUDO, KILL, '-KILL', '--', '-%d' % p.pid]).wait()
+            try:
+                out = p.communicate(timeout=10)[0]
+            except TimeoutExpired:
+                out = b''
+            out += b'leak check timed out\n'
+        out = out.decode('utf-8', 'replace')
+        if p.returncode:
+            out += 'leak check exited %d\n' % p.returncode
+    except OSError as e:
+        out = 'leak check failed: %s\n' % e
+    for line in out.splitlines():
+        if not line.startswith(label + ': '):
+            line = '%s: %s' % (label, line)
+        Leaks.found.add(label)
+        msg = 'Leaked state: %s\n' % line
+        write_log(msg, LOG_OUT)
+        write_log(bytearray(msg, encoding='utf-8'), LOG_FILE)
+        with open(LEAKS_FILE, 'a') as f:
+            f.write(line + '\n')
 
 
 def verify_file(pathname):
@@ -1178,7 +1253,8 @@ def kmemleak_cb(option, opt_str, value, parser):
 
 
 def options_cb(option, opt_str, value, parser):
-    path_options = ['outputdir', 'template', 'testdir', 'logfile']
+    path_options = ['outputdir', 'template', 'testdir', 'logfile',
+                    'leakcheck']
 
     if opt_str in parser.rargs:
         fail('%s may only be specified once.' % opt_str)
@@ -1208,6 +1284,10 @@ def parse_args():
                       default=None, dest='logfile', metavar='logfile',
                       type='string',
                       help='Read logfile and re-run tests which failed.')
+    parser.add_option('-L', action='callback', callback=options_cb,
+                      default='', dest='leakcheck',
+                      metavar='script', type='string',
+                      help='Report state each test leaks with this script.')
     parser.add_option('-g', action='store_true', default=False,
                       dest='do_groups', help='Make directories TestGroups.')
     parser.add_option('-o', action='callback', callback=options_cb,

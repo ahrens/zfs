@@ -36,6 +36,7 @@ dist_scripts_zfs_tests_callbacks_SCRIPTS = \
 	%D%/callbacks/zfs_dbgmsg.ksh \
 	%D%/callbacks/zfs_dmesg.ksh \
 	%D%/callbacks/zfs_failsafe.ksh \
+	%D%/callbacks/zfs_hygiene.ksh \
 	%D%/callbacks/zfs_mmp.ksh
 
 

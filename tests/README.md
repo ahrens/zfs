@@ -76,6 +76,17 @@ The following zfs-tests.sh options are supported:
                 can be DANGEROUS because it is possible that the script
                 will mistakenly remove a resource not related to the testing.
 
+    -p          Skip the pre-flight check and the per-test leak check.
+                By default zfs-tests.sh first runs
+                callbacks/zfs_hygiene.ksh, which cleans up what an earlier
+                test run left behind and the suite clearly owns (pools on
+                DISKS or test files, ZFS labels on DISKS, changed tunables,
+                zinject handlers, test users, files in the test directory)
+                and refuses to start if something remains that it does not
+                own.  Then test-runner runs it after every test to report
+                (as "Leaked state:" lines and in the "leaks" file of the
+                results) and undo the state each test leaves behind.
+
     -k          Disable cleanup after test failure.  When specified the
                 zfs-tests.sh script will not perform any additional cleanup
                 when test-runner exists.  This is useful when the results of
