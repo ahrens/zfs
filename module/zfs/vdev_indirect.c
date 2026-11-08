@@ -232,6 +232,14 @@ typedef struct indirect_child {
 	vdev_t *ic_vdev;
 
 	/*
+	 * Set when ic_vdev is a replacing or spare vdev whose children
+	 * returned different data to a scrub.  ic_data is then the copy that
+	 * vdev_mirror_io_done() considers most likely correct, and it is
+	 * rewritten to all of ic_vdev's children if the block checks out.
+	 */
+	boolean_t ic_force_repair;
+
+	/*
 	 * ic_duplicate is NULL when the ic_data contents are unique, when it
 	 * is determined to be a duplicate it references the primary child.
 	 */
@@ -1240,7 +1248,17 @@ vdev_indirect_read_split_done(zio_t *zio)
 {
 	indirect_child_t *ic = zio->io_private;
 
-	if (zio->io_error != 0) {
+	if (zio->io_error == ECKSUM &&
+	    (ic->ic_vdev->vdev_ops == &vdev_replacing_ops ||
+	    ic->ic_vdev->vdev_ops == &vdev_spare_ops)) {
+		/*
+		 * Without a BP, ECKSUM only comes from vdev_mirror_io_done()
+		 * when the children of a replacing or spare vdev disagree.
+		 * Keep the copy it returned so that the block can still be
+		 * reconstructed, and the new child repaired.
+		 */
+		ic->ic_force_repair = B_TRUE;
+	} else if (zio->io_error != 0) {
 		/*
 		 * Clear ic_data to indicate that we do not have data for this
 		 * child.
@@ -1417,6 +1435,8 @@ vdev_indirect_checksum_error(zio_t *zio,
  * (based on which copies actually read bad data, as opposed to which we
  * think might be wrong).  For the same reason, we always use
  * ZIO_FLAG_SELF_HEAL, to bypass the DTL check in zio_vdev_io_start().
+ * A replacing or spare vdev whose children disagreed (ic_force_repair) is
+ * rewritten even if its copy is the correct one.
  */
 static void
 vdev_indirect_repair(zio_t *zio)
@@ -1430,11 +1450,11 @@ vdev_indirect_repair(zio_t *zio)
 	    is != NULL; is = list_next(&iv->iv_splits, is)) {
 		for (int c = 0; c < is->is_children; c++) {
 			indirect_child_t *ic = &is->is_child[c];
-			if (ic == is->is_good_child)
+			if (!ic->ic_force_repair &&
+			    (ic == is->is_good_child ||
+			    ic->ic_duplicate == is->is_good_child))
 				continue;
 			if (ic->ic_data == NULL)
-				continue;
-			if (ic->ic_duplicate == is->is_good_child)
 				continue;
 
 			zio_nowait(zio_vdev_child_io(zio, NULL,

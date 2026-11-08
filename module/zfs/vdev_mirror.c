@@ -829,11 +829,12 @@ vdev_mirror_io_done(zio_t *zio)
 
 		/*
 		 * If we're scrubbing but don't have a BP available (because
-		 * this vdev is under a raidz or draid vdev) then the best we
-		 * can do is compare all of the copies read.  If they're not
+		 * this vdev is under a raidz or draid vdev, or holds a
+		 * segment of a split block of an indirect vdev) then the best
+		 * we can do is compare all of the copies read.  If they're not
 		 * identical then return a checksum error and the most likely
-		 * correct data.  The raidz code will issue a repair I/O if
-		 * possible.
+		 * correct data.  The raidz or indirect vdev code will issue a
+		 * repair I/O if possible.
 		 */
 		if (zio->io_bp == NULL) {
 			ASSERT(zio->io_vd->vdev_ops == &vdev_replacing_ops ||
