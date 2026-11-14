@@ -43,7 +43,6 @@ function custom_cleanup
 	log_must set_spa_load_verify_metadata 1
 	log_must set_spa_load_verify_data 1
 	log_must set_zfs_max_missing_tvds 0
-	log_must rm -rf $BACKUP_DEVICE_DIR
 	# Highly damaged pools may fail to be destroyed, so we export them.
 	poolexists $TESTPOOL1 && log_must zpool export $TESTPOOL1
 	cleanup

@@ -34,6 +34,7 @@ function cleanup
 	destroy_pool $TESTPOOL
 	destroy_pool $TESTPOOL2
 	rm -f $DEVICE1 $DEVICE2
+	rm -rf $altroot
 }
 
 log_assert "'zpool split' should be able to split encrypted pools"
@@ -42,7 +43,7 @@ log_onexit cleanup
 DEVICE1="$TEST_BASE_DIR/device-1"
 DEVICE2="$TEST_BASE_DIR/device-2"
 passphrase="password"
-altroot="$TESTDIR/zpool-split-$RANDOM"
+altroot="$TEST_BASE_DIR/zpool-split-$RANDOM"
 
 # 1. Create an encrypted pool
 truncate -s $SPA_MINDEVSIZE $DEVICE1

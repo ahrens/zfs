@@ -29,6 +29,14 @@
 
 verify_runnable "global"
 
+function cleanup
+{
+	poolexists $TESTPOOL && destroy_pool $TESTPOOL
+	delete_sparse_files
+}
+
+log_onexit cleanup
+
 log_assert "AnyRAID mirror1 can survive having 1 failed disk"
 
 log_must create_sparse_files "disk" 3 $DEVSIZE

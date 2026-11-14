@@ -40,6 +40,7 @@ function cleanup
 	# Reset tunable.
 	#
 	log_must set_tunable32 REMOVAL_SUSPEND_PROGRESS 0
+	default_cleanup_noexit
 }
 log_onexit cleanup
 

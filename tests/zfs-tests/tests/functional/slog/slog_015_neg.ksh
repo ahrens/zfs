@@ -46,6 +46,7 @@ function cleanup
 	set_tunable64 COMMIT_TIMEOUT_PCT $ORIG_TIMEOUT
 
 	poolexists $TESTPOOL && zpool destroy -f $TESTPOOL
+	rm -rf $VDIR $VDIR2
 }
 
 typeset ORIG_TIMEOUT=$(get_tunable COMMIT_TIMEOUT_PCT)

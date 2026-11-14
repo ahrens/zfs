@@ -29,6 +29,7 @@ function cleanup
 	destroy_pool $TESTPOOL1
 
 	log_must rm -f $CPATH $CPATHBKP $CPATHBKP2 $MD5FILE $MD5FILE2
+	log_must rm -rf $BACKUP_DEVICE_DIR
 
 	log_must rm -rf $DEVICE_DIR/*
 	typeset i=0

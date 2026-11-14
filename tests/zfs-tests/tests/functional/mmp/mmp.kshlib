@@ -176,7 +176,7 @@ function mmp_pool_destroy # pool dir
 		destroy_pool $pool
         fi
 
-	log_must rm -f $dir/*
+	log_must rm -rf $dir
 	mmp_clear_hostid
 }
 

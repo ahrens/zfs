@@ -48,6 +48,7 @@ function cleanup
 	for pool in $TESTPOOL $TESTPOOL1; do
 		poolexists $pool && destroy_pool $pool
 	done
+	delete_sparse_files
 }
 
 log_assert "Create a pool with same devices twice or create two pools with " \

@@ -31,6 +31,7 @@ verify_runnable "global"
 function cleanup
 {
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
+	delete_sparse_files
 }
 
 log_assert "'zpool create <pool> <anymirror|0|1|2|3> ...' can create a pool."

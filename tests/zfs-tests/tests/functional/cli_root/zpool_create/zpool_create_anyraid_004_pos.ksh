@@ -32,6 +32,7 @@ verify_runnable "global"
 function cleanup
 {
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
+	delete_sparse_files
 }
 
 log_assert "Pools can have multiple anyraid children with different disk counts"

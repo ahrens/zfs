@@ -1026,6 +1026,8 @@ function verify_fs_mountpoint
 			return 1
 		fi
 		log_must zfs set mountpoint=$mntpt $fs
+		# Remove the directory that mounting at $newmntpt made.
+		log_must rm -rf $newmntpt
 	fi
 
 	return 0

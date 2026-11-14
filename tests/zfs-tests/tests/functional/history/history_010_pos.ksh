@@ -39,6 +39,7 @@ function cleanup
 	del_user $HIST_USER
 	del_group $HIST_GROUP
 	datasetexists $root_testfs && destroy_dataset $root_testfs -rf
+	rm -f $OLD_HISTORY $TMP_HISTORY $NEW_HISTORY
 }
 
 log_assert "Verify internal long history information are correct."

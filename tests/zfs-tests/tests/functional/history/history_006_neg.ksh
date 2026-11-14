@@ -40,6 +40,7 @@ function cleanup
 {
 	datasetexists $fs && destroy_dataset $fs -rf
 	log_must zfs create $fs
+	rm -f $OLD_HISTORY $TMP_HISTORY $NEW_HISTORY
 }
 
 log_assert "Verify 'zfs list|get|holds|mount|unmount|share|unshare|send' " \

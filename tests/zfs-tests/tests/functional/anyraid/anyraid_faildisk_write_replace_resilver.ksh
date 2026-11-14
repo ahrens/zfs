@@ -34,6 +34,7 @@ log_assert "AnyRAID mirror can resilver a replaced disk"
 
 cleanup() {
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
+	delete_sparse_files
 }
 
 log_onexit cleanup

@@ -42,7 +42,7 @@ verify_runnable "global"
 cleanup() {
 	restore_tunable ANYRAID_MIN_TILE_SIZE
 	restore_tunable SPA_NUM_ALLOCATORS
-	log_must zpool destroy $TESTPOOL2
+	destroy_pool $TESTPOOL2
 	rm -f $TEST_BASE_DIR/vdev_file.*
 }
 

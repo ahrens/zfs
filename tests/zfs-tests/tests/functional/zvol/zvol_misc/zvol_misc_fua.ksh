@@ -46,8 +46,9 @@ typeset zvolpath=${ZVOL_DEVDIR}/$TESTPOOL/$TESTVOL
 typeset DISK1=${DISKS%% *}
 function cleanup
 {
-	log_must zpool remove $TESTPOOL $datafile3
-	rm "$datafile1" "$datafile2" "$datafile2"
+	vdevs_in_pool $TESTPOOL $datafile3 &&
+	    log_must zpool remove $TESTPOOL $datafile3
+	rm -f "$datafile1" "$datafile2" "$datafile3"
 }
 
 # Prints the total number of sync writes for a vdev

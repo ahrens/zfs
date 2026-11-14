@@ -2338,6 +2338,10 @@ function create_sparse_files
 function delete_sparse_files
 {
 	rm -rf "$TESTDIR/sparse_files"
+	# Also remove $TESTDIR if create_sparse_files made it: an empty one
+	# that isn't a mount point.
+	rmdir "$TESTDIR" 2>/dev/null
+	return 0
 }
 
 function add_user_freebsd #<group_name> <user_name> <basedir>

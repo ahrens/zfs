@@ -40,6 +40,7 @@ function cleanup
 {
 	datasetexists $root_testfs && destroy_dataset $root_testfs -rf
 	log_must zfs create $root_testfs
+	rm -f $OLD_HISTORY $TMP_HISTORY $NEW_HISTORY
 }
 
 log_assert "Pool history records all recursive operations."

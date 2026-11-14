@@ -31,6 +31,7 @@ verify_runnable "global"
 function cleanup
 {
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
+	delete_sparse_files
 }
 
 log_assert "anyraid vdev specifications detect problems correctly"

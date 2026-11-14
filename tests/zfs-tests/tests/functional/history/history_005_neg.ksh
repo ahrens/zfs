@@ -40,6 +40,13 @@
 
 verify_runnable "global"
 
+function cleanup
+{
+	rm -f $OLD_HISTORY $NEW_HISTORY
+}
+
+log_onexit cleanup
+
 log_assert "Verify 'zpool get|history|list|status|iostat' will not be logged."
 
 # Save initial TESTPOOL history

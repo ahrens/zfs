@@ -38,6 +38,7 @@ function cleanup
 {
 	del_user $HIST_USER
 	del_group $HIST_GROUP
+	rm -f $OLD_HISTORY $TMP_HISTORY $NEW_HISTORY
 }
 
 log_assert "Verify delegated commands are logged in the pool history."

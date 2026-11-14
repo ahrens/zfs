@@ -44,6 +44,7 @@ function cleanup
 	for file in $VDEV1 $VDEV2 $VDEV3 $VDEV4; do
 		[[ -f $file ]] && rm -f $file
 	done
+	rm -f $OLD_HISTORY $TMP_HISTORY $NEW_HISTORY
 }
 
 log_assert "Verify zpool sub-commands which modify state are logged."

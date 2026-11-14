@@ -40,6 +40,7 @@ verify_runnable "global"
 function cleanup
 {
         poolexists $TESTPOOL && destroy_pool $TESTPOOL
+        delete_sparse_files
 }
 
 log_assert "'zpool add' should fail if vdevs are the same or vdev is " \

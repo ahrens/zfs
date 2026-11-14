@@ -43,6 +43,7 @@ function cleanup
 		datasetexists $dataset && destroy_dataset $dataset -Rf
 	done
 	rm -rf /history.$$
+	rm -f $OLD_HISTORY $TMP_HISTORY $NEW_HISTORY
 }
 
 log_assert "Verify zfs sub-commands which modify state are logged."

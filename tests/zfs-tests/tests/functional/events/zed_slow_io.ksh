@@ -73,6 +73,7 @@ function cleanup
 		grep "Diagnosis Engine" $ZEDLET_DIR/zed.log
 		destroy_pool $TESTPOOL
 	fi
+	rm -rf $TESTDIR
 	log_must zed_stop
 
 	log_must rm -f $VDEV
