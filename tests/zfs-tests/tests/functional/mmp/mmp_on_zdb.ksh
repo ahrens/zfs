@@ -40,10 +40,11 @@ function cleanup
 {
 	mmp_clear_suspended $TESTPOOL
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
-	for DISK in $DISKS; do
-		zpool labelclear -f $DEV_RDSKDIR/$DISK
-	done
 	log_must mmp_clear_hostid
+	# Also removes the pool if a failure left it exported.
+	for vdev in $vdevs; do
+		log_must zpool labelclear -f $vdev
+	done
 }
 
 log_assert "Verify zdb -d works while multihost is enabled"
@@ -53,6 +54,7 @@ verify_runnable "global"
 verify_disk_count "$DISKS" 2
 
 log_must zpool create -f $TESTPOOL mirror $DISKS
+vdevs=$(get_disklist_fullpath $TESTPOOL)
 log_must zfs create $TESTPOOL/$TESTFS
 log_must mmp_set_hostid $HOSTID1
 log_must zpool set multihost=on $TESTPOOL
@@ -78,7 +80,5 @@ log_must zdb -ed $TESTPOOL/$TESTFS
 log_must zdb -ed $TESTPOOL/$TESTFS@snap
 
 log_must zpool import $TESTPOOL
-
-cleanup
 
 log_pass "zdb -d works while multihost is enabled"

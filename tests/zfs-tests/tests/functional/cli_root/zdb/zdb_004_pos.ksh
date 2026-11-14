@@ -39,8 +39,9 @@ log_onexit cleanup
 function cleanup
 {
 	datasetexists $TESTPOOL && destroy_pool $TESTPOOL
-	for DISK in $DISKS; do
-		zpool labelclear -f $DEV_RDSKDIR/$DISK
+	# The labels are on the partitions when the pool uses whole disks.
+	for dev in ${DEVS:-$DISKS}; do
+		zpool labelclear -f $DEV_RDSKDIR/$dev
 	done
 	if is_freebsd; then
 		log_must sysctl kern.geom.debugflags=$saved_debugflags

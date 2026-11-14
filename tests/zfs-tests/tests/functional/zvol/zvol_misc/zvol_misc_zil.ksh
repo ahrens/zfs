@@ -50,6 +50,7 @@ for logbias in ${logbias_prop_vals[@]}; do
 		# 1. Create a ZVOL with logbias=throughput and sync=always
 		log_must zfs create -V $VOLSIZE -b 128K -o sync=$sync \
 		    -o logbias=$logbias $ZVOL
+		block_device_wait $ZDEV
 
 		# 2. Write data to its device node
 		for i in {1..50}; do

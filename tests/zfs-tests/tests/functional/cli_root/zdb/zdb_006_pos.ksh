@@ -32,8 +32,9 @@
 function cleanup
 {
 	datasetexists $TESTPOOL && destroy_pool $TESTPOOL
-	for DISK in $DISKS; do
-		zpool labelclear -f $DEV_RDSKDIR/$DISK
+	# The labels are on the partitions when the pool uses whole disks.
+	for dev in ${DEVS:-$DISKS}; do
+		zpool labelclear -f $DEV_RDSKDIR/$dev
 	done
 }
 
@@ -44,6 +45,7 @@ verify_runnable "global"
 verify_disk_count "$DISKS" 2
 
 default_mirror_setup_noexit $DISKS
+DEVS=$(get_pool_devices $TESTPOOL $DEV_RDSKDIR)
 log_must zfs snap $TESTPOOL/$TESTFS@snap
 
 log_must zdb -d $TESTPOOL
