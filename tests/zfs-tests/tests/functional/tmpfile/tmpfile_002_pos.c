@@ -26,6 +26,8 @@
  *
  */
 
+static char dpath[1024];
+
 static void
 run(const char *op)
 {
@@ -33,6 +35,11 @@ run(const char *op)
 	char buf[50];
 	sprintf(buf, "sudo -E zpool %s $TESTPOOL", op);
 	if ((ret = system(buf)) != 0) {
+		int e = errno;
+
+		/* Don't leave the link behind for the next test. */
+		(void) unlink(dpath);
+		errno = e;
 		if (ret == -1)
 			err(4, "system \"zpool %s\"", op);
 		else
@@ -45,7 +52,7 @@ int
 main(void)
 {
 	int i, fd;
-	char spath[1024], dpath[1024];
+	char spath[1024];
 	const char *penv[] = {"TESTDIR", "TESTFILE0"};
 
 	(void) fprintf(stdout, "Verify O_TMPFILE file can be linked.\n");

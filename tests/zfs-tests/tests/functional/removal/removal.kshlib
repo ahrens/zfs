@@ -125,10 +125,15 @@ function test_removal_with_operation # callback [args]
 	start_random_writer $TESTDIR/$TESTFILE0 1g
 	killpid=$!
 
+	# Stop the writer if the test fails: otherwise it can recreate the
+	# file under the unmounted mountpoint and keep running.
+	log_onexit_push test_removal_with_operation_kill
+
 	log_must attempt_during_removal $TESTPOOL $REMOVEDISK "$@"
 	log_mustnot vdevs_in_pool $TESTPOOL $REMOVEDISK
 	log_must zdb -cd $TESTPOOL
 
+	log_onexit_pop
 	kill $killpid
 	wait
 

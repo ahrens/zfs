@@ -414,7 +414,9 @@ function verify_fs_receive
 		datasets="$newfs $newvol"
 	fi
 
+	typeset -i ret=0
 	for dtst in $datasets ; do
+		ret=1
 
 		typeset dtstsnap=$dtst@snap.$stamp
 		log_must zfs snapshot $dtstsnap
@@ -424,28 +426,28 @@ function verify_fs_receive
 
 		user_run $user eval "zfs receive $dtst < $bak_root"
 		if datasetexists $dtstsnap ; then
-			return 1
+			break
 		fi
 
 		log_must zfs allow $user create $fs
 		user_run $user eval "zfs receive $dtst < $bak_root"
 		log_must zfs unallow $user create $fs
 		if datasetexists $dtstsnap ; then
-			return 1
+			break
 		fi
 
 		log_must zfs allow $user mount $fs
 		user_run $user eval "zfs receive $dtst < $bak_root"
 		log_must zfs unallow $user mount $fs
 		if datasetexists $dtstsnap ; then
-			return 1
+			break
 		fi
 
 		log_must zfs allow $user mount,create $fs
 		user_run $user eval "zfs receive $dtst < $bak_root"
 		log_must zfs unallow $user mount,create $fs
 		if ! datasetexists $dtstsnap ; then
-			return 1
+			break
 		fi
 
 		# check the data integrity
@@ -455,14 +457,14 @@ function verify_fs_receive
 		log_must eval "zfs send $dtstsnap > $bak_root"
 		log_must_busy zfs destroy -rf $dtst
 		if [ "$(cksum < $bak_user)" != "$(cksum < $bak_root)" ]; then
-			return 1
+			break
 		fi
 
-		rm -rf $bak_user $bak_root
-
+		ret=0
 	done
 
-	return 0
+	rm -f $bak_user $bak_root
+	return $ret
 }
 
 function verify_fs_receive_append

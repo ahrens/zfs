@@ -31,6 +31,8 @@ function cleanup {
 	rm -f $vdev1 $vdev2
 }
 
+log_onexit cleanup
+
 log_must mkfile $MINVDEVSIZE $vdev1 $vdev2
 
 log_must zpool create pool1 $vdev1

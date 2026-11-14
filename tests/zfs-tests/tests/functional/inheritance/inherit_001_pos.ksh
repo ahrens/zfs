@@ -428,6 +428,8 @@ if [[ ${#config_files[*]} != ${#state_files[*]} ]]; then
 	    " (${#config_files[*]}) and state files ${#state_files[*]}"
 fi
 
+log_onexit default_cleanup_noexit
+
 while ((k < ${#config_files[*]})); do
 	default_cleanup_noexit
 	def_recordsize=0
