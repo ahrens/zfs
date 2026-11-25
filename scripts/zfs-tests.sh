@@ -763,7 +763,7 @@ fi
 # disk labels, tunables, zinject handlers, test users, ...), and refuse to
 # run if something is left that the suite does not own.
 #
-HYGIENE_SCRIPT="$STF_SUITE/callbacks/zfs_hygiene.ksh"
+HYGIENE_SCRIPT="$STF_SUITE/callbacks/zfs_hygiene.py"
 if [ "$HYGIENE" != "no" ]; then
 	sudo -E env DISKS="$DISKS" KEEP="$KEEP" FILEDIR="$FILEDIR" \
 	    STF_SUITE="$STF_SUITE" STF_PATH="$STF_PATH" \

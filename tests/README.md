@@ -78,7 +78,7 @@ The following zfs-tests.sh options are supported:
 
     -p          Skip the pre-flight check and the per-test leak check.
                 By default zfs-tests.sh first runs
-                callbacks/zfs_hygiene.ksh, which cleans up what an earlier
+                callbacks/zfs_hygiene.py, which cleans up what an earlier
                 test run left behind and the suite clearly owns (pools on
                 DISKS or test files, ZFS labels on DISKS, changed tunables,
                 zinject handlers, test users, files in the test directory)
