@@ -106,10 +106,11 @@ TUNABLE_USE = re.compile(
     r'(?:set|get|save|restore)_tunable(?:32|64)? +"?([a-z_0-9]+)')
 # illumos prints disks as cXtYdZsN, also with zpool list -P.
 CTD_DISK = re.compile(r'c[0-9]+(t[0-9A-Fa-f]+)?d[0-9]+([sp][0-9]+)?$')
-# Undo in an order that works: handlers and mounts before pools, pools
-# before the devices and files they are on.
-UNDO_ORDER = ('tunable zinject mount dataset pool swap loop lofi user group '
-              'module file').split()
+# Undo in an order that works: handlers, mounts, swap and dump before the
+# datasets and pools they hold busy, pools before the devices and files they
+# are on.
+UNDO_ORDER = ('tunable zinject mount swap dump dataset pool loop lofi user '
+              'group module file').split()
 
 
 class Failed(Exception):
@@ -247,15 +248,23 @@ def under_basedir(path):
     return path.startswith(BASEDIR + '/')
 
 
+def unescape(field):
+    """/proc/self/mounts and mount -p write a blank, tab, newline or
+    backslash in a name as \\ooo."""
+    return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), field)
+
+
 def mounts():
     """Mounted file systems: [special, mountpoint, fstype]."""
+    if UNAME == 'SunOS':
+        # The fields are separated by tabs, and names are not escaped.
+        return [(line.split('\t') + ['', ''])[:3]
+                for line in lines(read('/etc/mnttab'))]
     if UNAME == 'Linux':
         text = read('/proc/self/mounts')
-    elif UNAME == 'SunOS':
-        text = read('/etc/mnttab')
     else:
         text = out('mount', '-p')
-    return [row[:3] for row in rows(text)]
+    return [[unescape(field) for field in row[:3]] for row in rows(text)]
 
 
 def mounted_under(path):
@@ -483,7 +492,13 @@ def other_mounts():
 
 
 def loop_devices():
-    return lines(out('losetup', '-nO', 'NAME,BACK-FILE', '-l'))
+    """"<device> <backing file>" for each loop device.  losetup pads the
+    device names to the same width."""
+    loops = []
+    for line in lines(out('losetup', '-nO', 'NAME,BACK-FILE', '-l')):
+        dev, _, backing = line.strip(' ').partition(' ')
+        loops.append(('%s %s' % (dev, backing.strip(' '))).rstrip(' '))
+    return loops
 
 
 def swap_devices():
@@ -666,6 +681,21 @@ def to_report(changes, base, group_base, reported, is_test):
     return [change for change in changes if not skip(change)]
 
 
+def still_true(text, now):
+    """Does a reported change still describe the state now (a set of
+    lines)?  A leak that is gone, e.g. removed by a cleanup, may come back
+    from a later test, which is then to blame for it."""
+    what, _, rest = text.partition(' ')
+    if what == 'leaked':
+        return rest in now
+    if what == 'removed':
+        return rest not in now
+    if what == 'changed':
+        return any(rest.startswith(key(line) + ' ') and
+                   rest.endswith(' -> ' + value(line)) for line in now)
+    return True
+
+
 def file_owner(path):
     try:
         uid = os.lstat(path).st_uid
@@ -693,8 +723,9 @@ def undo(change):
     elif op == 'leaked zinject':
         must('zinject', '-c', name)
     elif op == 'leaked mount':      # mount <mountpoint> <fstype> <special>
-        owned(under_basedir(name) or is_test_vdev(field[3]))
-        must('umount', '-f', name)
+        mnt, _, special = change.line[len('mount '):].rsplit(' ', 2)
+        owned(under_basedir(mnt) or is_test_vdev(special))
+        must('umount', '-f', mnt)
     elif op == 'leaked dataset':
         # Names may have spaces.  Its descendants and clones are leaks
         # too, and may be gone already.
@@ -713,7 +744,7 @@ def undo(change):
         owned(name == 'zed')
         must('pkill', '-f', 'zed .*-d %s/zed' % BASEDIR)
     elif op in ('leaked loop', 'leaked lofi'):      # <device> <file>
-        owned(under_basedir(field[2]))
+        owned(under_basedir(change.line[len(change.kind + name) + 2:]))
         must('losetup' if change.kind == 'loop' else 'lofiadm', '-d', name)
     elif op == 'leaked swap':
         owned(is_test_vdev(name))
@@ -814,10 +845,14 @@ def check(statefile, label, sid='', group='', report_only=False):
     if not os.path.isfile(group_base):
         group_base = base
     reported = os.path.join(os.path.dirname(statefile), '.leakcheck-reported')
-    write(reported, [], mode='ab')
+    was_reported = lines(read(reported))
+    current = {line.strip(' \t') for line in now}
+    still = [text for text in was_reported if still_true(text, current)]
+    if not report_only and still != was_reported:
+        write(reported, still)
     changes = to_report(
         state_diff(lines(read(statefile)), now), set(lines(read(base))),
-        set(lines(read(group_base))), set(lines(read(reported))), bool(sid))
+        set(lines(read(group_base))), set(still), bool(sid))
 
     def undo_order(change):
         if change.kind in UNDO_ORDER:
@@ -852,22 +887,26 @@ class Preflight:
         msg('PROBLEM: ' + text)
         self.problems += 1
 
-    def fix(self, what, *command):
-        """Run a cleanup command, or only say what it would be with -n."""
+    def fix(self, what, *command, last=True):
+        """Run a cleanup command, or only say what it would be with -n.
+        Return whether it is done.  If it fails and is not the last try,
+        it is not a problem yet."""
         shown = ' '.join(command)
         if self.dryrun:
             self.problem('%s (would run: %s)' % (what, shown))
-            return
+            return True
         try:
             if command[0] in self.actions:
                 self.actions[command[0]](*command[1:])
             else:
                 must(*command)
         except Failed:
-            self.problem('%s (failed: %s)' % (what, shown))
-            return
+            if last:
+                self.problem('%s (failed: %s)' % (what, shown))
+            return False
         msg('cleaned: %s (%s)' % (what, shown))
         self.cleaned += 1
+        return True
 
     def check_env(self):
         runner = (r'^[^ ]*python[0-9.]* [^ ]*'
@@ -974,9 +1013,9 @@ class Preflight:
                 if pool_suspended(pool):
                     health = 'SUSPENDED'
                 if health in ('ONLINE', 'DEGRADED'):
-                    done.add(pool)
-                    self.fix('destroy leftover pool ' + pool,
-                             'destroy_pool', pool)
+                    if self.fix('destroy leftover pool ' + pool,
+                                'destroy_pool', pool, last=last):
+                        done.add(pool)
                 elif last:
                     self.problem('leftover pool %s is %s; clear it or '
                                  'reboot' % (pool, health))
@@ -985,8 +1024,7 @@ class Preflight:
         """Loop and lofi devices on test files, and scsi_debug."""
         if UNAME == 'Linux':
             for loop in loop_devices():
-                dev, _, backing = loop.strip().partition(' ')
-                backing = backing.strip()
+                dev, _, backing = loop.partition(' ')
                 if not under_basedir(backing):
                     continue
                 for dm in [row[0] for row in rows(out('dmsetup', 'ls'))]:
@@ -1017,7 +1055,9 @@ class Preflight:
                       for s in (0, 1, 2, 3, 4, 5, 6, 8)]
             return (['/dev/rdsk/%sp0' % disk] +
                     [path for path in slices if os.path.exists(path)])
-        return sorted(glob.glob('/dev/%s*' % glob.escape(disk)))
+        return sorted(path for path in glob.glob('/dev/%s*' %
+                                                 glob.escape(disk))
+                      if disk_of(path) == disk)
 
     def clean_disks(self):
         """Labels of exported or destroyed pools make "zpool import" find more
@@ -1134,7 +1174,8 @@ def main(argv):
     # Print names as they are, whatever bytes they hold.
     sys.stdout = io.TextIOWrapper(
         sys.stdout.buffer, encoding=sys.getfilesystemencoding(),
-        errors=sys.getfilesystemencodeerrors(), newline='\n')
+        errors=sys.getfilesystemencodeerrors(), newline='\n',
+        line_buffering=True)
     if os.geteuid() != 0:
         sys.stderr.write('zfs_hygiene: must run as root\n')
         return 2

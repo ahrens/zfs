@@ -35,7 +35,7 @@ import zfs_hygiene as hy
 
 ZPOOL_LIST = ('zpool', 'list', '-H', '-o', 'name')
 # What the tests fake.
-REAL = {'read': hy.read, 'disk_of': hy.disk_of}
+REAL = {'read': hy.read, 'disk_of': hy.disk_of, 'find': hy.find}
 
 
 class HygieneTest(unittest.TestCase):
@@ -62,9 +62,20 @@ class HygieneTest(unittest.TestCase):
                    HYGIENE_DIR=self.tmp + '/hygiene',
                    TUNABLE_LIST=self.tmp + '/hygiene/tunables.list',
                    PARAMETERS=self.tmp + '/sys/%s', run=self.run_command,
-                   read=self.read, disk_of=self.disk_of)
+                   read=self.read, disk_of=self.disk_of,
+                   find=lambda top, is_wanted: (
+                       [] if top == '/dev/zvol' else
+                       REAL['find'](top, is_wanted)))
+        real_isdir = os.path.isdir
+        self.patch_os('isdir', lambda path: (
+            False if path == '/sys/module/scsi_debug' else real_isdir(path)))
         hy.test_disks.cache_clear()
         self.addCleanup(hy.test_disks.cache_clear)
+
+    def patch_os(self, name, value):
+        patcher = mock.patch.object(hy.os.path, name, value)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def patch(self, **attributes):
         for name, value in attributes.items():
@@ -411,11 +422,26 @@ class UndoTest(HygieneTest):
         self.commands['losetup -d /dev/loop3'] = ''
         self.commands['lofiadm -d /dev/lofi/1'] = ''
         vdev = self.base + '/file-vdev1'
-        self.assertTrue(self.undone('leaked', 'loop /dev/loop3   ' + vdev))
+        self.assertTrue(self.undone('leaked', 'loop /dev/loop3 ' + vdev))
         self.assertFalse(self.undone('leaked', 'loop /dev/loop4 /home/img'))
         self.assertFalse(self.undone('leaked', 'loop /dev/loop5'))
         self.assertTrue(self.undone('leaked', 'lofi /dev/lofi/1 ' + vdev))
         self.assertFalse(self.undone('leaked', 'lofi /dev/lofi/2 /export/f'))
+
+    def test_mount_with_a_blank_in_its_name(self):
+        mnt = self.base + '/my dir'
+        self.commands['umount -f ' + mnt] = ''
+        self.files['/proc/self/mounts'] = (
+            'tmpfs %s tmpfs rw 0 0\n' % mnt.replace(' ', '\\040'))
+        self.assertEqual(hy.other_mounts(), [(mnt, 'tmpfs', 'tmpfs')])
+        self.assertTrue(self.undone('leaked', 'mount %s tmpfs tmpfs' % mnt))
+        self.assertEqual(self.ran, ['umount -f ' + mnt])
+        self.assertFalse(self.undone('leaked', 'mount /my dir tmpfs tmpfs'))
+
+    def test_swap_and_dump_before_datasets_and_pools(self):
+        order = hy.UNDO_ORDER
+        for kind in ('swap', 'dump'):
+            self.assertLess(order.index(kind), order.index('dataset'))
 
     def test_swap_on_test_devices(self):
         self.commands['swapoff /dev/zvol/testpool/swap'] = ''
@@ -464,7 +490,8 @@ class UndoTest(HygieneTest):
                                 ('zfstest', True), ('alice', False)):
             self.patch(file_owner=lambda path, owner=owner: owner)
             self.assertEqual(self.undone('leaked', 'file a  b *'), expected)
-            self.assertEqual(self.ran, ['rm -rf ' + path] * expected)
+            self.assertEqual(self.ran,
+                             ['rm -rf ' + path] * expected)
 
     def test_file_with_a_mount_in_it_is_left(self):
         self.patch(file_owner=lambda path: 'root')
@@ -472,6 +499,14 @@ class UndoTest(HygieneTest):
         self.files['/proc/self/mounts'] = (
             'tank/fs %s/dir/mnt zfs rw 0 0\n' % self.base)
         self.assertFalse(self.undone('leaked', 'file dir'))
+        self.files['/proc/self/mounts'] = (
+            'tank/fs %s/my\\040dir/mnt zfs rw 0 0\n' % self.base)
+        self.assertFalse(self.undone('leaked', 'file my dir'))
+        self.patch(UNAME='SunOS')
+        self.files['/etc/mnttab'] = (
+            'tank/fs\t%s/my dir/mnt\tzfs\trw\t0\n' % self.base)
+        self.assertFalse(self.undone('leaked', 'file my dir'))
+        self.patch(UNAME='Linux')
         self.files['/proc/self/mounts'] = (
             'tank/fs %s/directory zfs rw 0 0\n' % self.base)
         self.assertTrue(self.undone('leaked', 'file dir'))
@@ -613,7 +648,8 @@ class StateTest(HygieneTest):
         self.commands['zinject'] = (
             ' ID  POOL      OBJSET\n---  ----\n  1  testpool  0\n')
         self.commands['hostid'] = '00bab10c\n'
-        self.commands['losetup -nO NAME,BACK-FILE -l'] = '/dev/loop0 /f\n'
+        self.commands['losetup -nO NAME,BACK-FILE -l'] = (
+            '/dev/loop0  /f\n/dev/loop10 /a b\n/dev/loop2\n')
         self.commands['dmsetup ls'] = 'No devices found\n'
         self.files.update({
             '/proc/self/mounts': ('/dev/sda1 / ext4 rw 0 0\n'
@@ -633,7 +669,8 @@ class StateTest(HygieneTest):
             'arc c_max 1000', 'arc c_min 10', 'dataset testpool/fs',
             'dataset testpool/fs#mark', 'dataset testpool/fs@snap',
             'file testfile', 'group wheel', 'hostid 00bab10c',
-            'loop /dev/loop0 /f', 'mount / ext4 /dev/sda1',
+            'loop /dev/loop0 /f', 'loop /dev/loop10 /a b',
+            'loop /dev/loop2', 'mount / ext4 /dev/sda1',
             'mount %s/t tmpfs tmpfs' % self.base, 'pool rpool',
             'pool testpool', 'share /testpool/fs', 'swap /dev/sda2',
             'user # comment ', 'user root /root',
@@ -722,6 +759,29 @@ class CheckTest(HygieneTest):
             'tests/a/b: removed pool rpool', 'tests/a/b: leaked share /x'])
         self.statefile = group
         self.assertEqual(self.check(), [])
+
+    def test_reported_leak_that_is_gone_is_reported_again(self):
+        self.check()
+        self.now += ['share /x', 'share /y']
+        self.now[self.now.index('tunable zfs/a 1')] = 'tunable zfs/a 2'
+        self.patch(set_tunable=mock.Mock(side_effect=hy.Failed('no')))
+        self.assertEqual(self.check(), [
+            'tests/a/b: changed tunable zfs/a 1 -> 2 (undo failed: no)',
+            'tests/a/b: leaked share /x', 'tests/a/b: leaked share /y'])
+        # A cleanup removes /x and puts the tunable back.
+        self.now.remove('share /x')
+        self.now[self.now.index('tunable zfs/a 2')] = 'tunable zfs/a 1'
+        self.check()
+        reported = hy.lines(hy.read(self.reported))
+        self.assertIn('leaked share /y', reported)
+        self.assertNotIn('leaked share /x', reported)
+        self.assertNotIn('changed tunable zfs/a 1 -> 2', reported)
+        # A later test leaks them again.
+        self.now += ['share /x']
+        self.now[self.now.index('tunable zfs/a 1')] = 'tunable zfs/a 2'
+        self.assertEqual(self.check(), [
+            'tests/a/b: changed tunable zfs/a 1 -> 2 (undo failed: no)',
+            'tests/a/b: leaked share /x'])
 
     def test_removed_by_a_test_only_if_in_the_group_base(self):
         self.statefile = self.groupfile
@@ -837,6 +897,41 @@ class PreflightTest(HygieneTest):
             'it or reboot'])
         self.assertEqual(self.ran.count('zpool destroy -f testpool'), 1)
         self.assertNotIn('zpool destroy -f rpool', self.ran)
+
+    def test_leftover_pool_destroyed_after_the_pool_on_it(self):
+        # testpool1 is on a zvol of testpool, which is busy until testpool1
+        # is gone.
+        self.pool('testpool', '/dev/sdb1')
+        self.pool('testpool1', '/dev/zvol/testpool/vol')
+        busy = (1, '', 'cannot destroy testpool: pool is busy\n')
+        self.commands['zpool destroy -f testpool'] = busy
+
+        real_run = self.run_command
+
+        def run(*argv, **kwargs):
+            result = real_run(*argv, **kwargs)
+            if argv == ('zpool', 'destroy', '-f', 'testpool1'):
+                self.commands['zpool destroy -f testpool'] = ''
+            return result
+        with mock.patch.object(hy, 'run', run):
+            preflight, output = self.preflight('clean_pools')
+        self.assertEqual(self.ran.count('zpool destroy -f testpool'), 2)
+        self.assertEqual((preflight.cleaned, preflight.problems), (2, 0))
+        self.commands['zpool destroy -f testpool'] = busy
+        self.commands['zpool destroy -f testpool1'] = busy
+        preflight, output = self.preflight('clean_pools')
+        self.assertEqual(preflight.problems, 2)
+        self.assertEqual(len(output), 2)
+
+    def test_freebsd_disk_paths(self):
+        self.patch(UNAME='FreeBSD')
+        self.patch_os('exists', lambda path: True)
+        with mock.patch.object(hy.glob, 'glob', return_value=[
+                '/dev/da1', '/dev/da1p1', '/dev/da1s1a', '/dev/da10',
+                '/dev/da10p1']):
+            self.patch(disk_of=REAL['disk_of'])
+            self.assertEqual(hy.Preflight.disk_paths('da1'),
+                             ['/dev/da1', '/dev/da1p1', '/dev/da1s1a'])
 
     def test_users_and_groups(self):
         self.files['/etc/passwd'] = (
