@@ -43,6 +43,8 @@ function cleanup {
 		log_must umount /tmp/$NEWFS_DEFAULT_FS.$$
 	fi
 	log_must rm -rf /tmp/$NEWFS_DEFAULT_FS.$$
+	datasetexists $TESTPOOL/$TESTFS/zvol && \
+		destroy_dataset $TESTPOOL/$TESTFS/zvol
 }
 
 log_assert "Files from $NEWFS_DEFAULT_FS with xattrs copied to zfs retain xattr info."

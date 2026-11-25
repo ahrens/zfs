@@ -19,6 +19,15 @@ fi
 
 username="${username}rec"
 
+function cleanup
+{
+	del_user ${username}
+	datasetexists "$TESTPOOL/pampam" && \
+		destroy_dataset "$TESTPOOL/pampam" -r
+}
+
+log_onexit cleanup
+
 # Set up a deeper hierarchy, a mountpoint that doesn't interfere with other tests,
 # and a user which references that mountpoint
 log_must zfs create "$TESTPOOL/pampam"

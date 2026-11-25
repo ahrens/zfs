@@ -19,6 +19,15 @@
 
 verify_runnable "global"
 
+function cleanup
+{
+	# libzfs_input_check does not destroy all that it creates.
+	datasetexists $TESTPOOL/test-fs && \
+		destroy_dataset $TESTPOOL/test-fs -R
+}
+
+log_onexit cleanup
+
 #
 # DESCRIPTION:
 #	run C program to test passing different input to libzfs ioctls

@@ -44,6 +44,8 @@ function cleanup
 	if mountpoint $WORKDIR; then
 		log_must umount $WORKDIR
 	fi
+	datasetexists "$TESTPOOL/userns" && \
+		destroy_dataset "$TESTPOOL/userns"
 	log_must rm -rf $WORKDIR
 }
 

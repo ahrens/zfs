@@ -56,8 +56,8 @@ verify_runnable "both"
 
 function cleanup
 {
-	datasetexists $TESTPOOL/128k && destroy_dataset $TESTPOOL/128k
-	datasetexists $TESTPOOL/1m && destroy_dataset $TESTPOOL/1m
+	datasetexists $TESTPOOL/$small && destroy_dataset $TESTPOOL/$small -r
+	datasetexists $TESTPOOL/$large && destroy_dataset $TESTPOOL/$large -r
 	cleanup_pool $POOL2
 	destroy_pool $POOL3
 }

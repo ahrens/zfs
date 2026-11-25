@@ -45,6 +45,14 @@ f1=/$POOL/$sendds/f1
 f2=/$POOL/$sendds/f2
 f3=/$POOL/$sendds/f3
 
+function cleanup
+{
+	datasetexists $POOL/$recvds && destroy_dataset $POOL/$recvds -r
+	datasetexists $POOL/$sendds && destroy_dataset $POOL/$sendds -r
+}
+
+log_onexit cleanup
+
 #
 # We need to set xattr=sa and dnodesize=legacy to guarantee sequential
 # object numbers for this test. Otherwise, if we used directory-based

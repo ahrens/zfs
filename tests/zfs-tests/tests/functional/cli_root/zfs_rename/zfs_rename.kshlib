@@ -103,6 +103,12 @@ function cleanup
 
 	datasetexists $TESTPOOL/$RECVFS && \
 		destroy_dataset $TESTPOOL/$RECVFS -r
+
+	# additional_setup created these.
+	datasetexists $TESTPOOL/$TESTFS1 && \
+		destroy_dataset $TESTPOOL/$TESTFS1 -r
+	datasetexists $TESTPOOL/$TESTCTR1 && \
+		destroy_dataset $TESTPOOL/$TESTCTR1 -r
 }
 
 function cmp_data #<$1 src data, $2 tgt data>

@@ -44,8 +44,11 @@ fi
 
 function cleanup
 {
+	# The test runs in the file system; leave it so that it can be
+	# unmounted.
+	log_must cd /
 	datasetexists $TESTPOOL/cp-reflink && \
-	    destroy_dataset $$TESTPOOL/cp-reflink -f
+	    destroy_dataset $TESTPOOL/cp-reflink -f
 	log_must restore_tunable BCLONE_WAIT_DIRTY
 }
 

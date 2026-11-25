@@ -54,6 +54,12 @@ function cleanup
 		done
 	done
 
+	# zfs create -p made the parents too.
+	for pfs in $TESTFS1 $TESTFS2 $TESTFS3; do
+		datasetexists $TESTPOOL/$pfs && \
+			destroy_dataset $TESTPOOL/$pfs -f
+	done
+
 	log_must zfs share -a
 }
 

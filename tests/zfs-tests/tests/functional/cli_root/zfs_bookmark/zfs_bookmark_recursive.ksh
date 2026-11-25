@@ -46,6 +46,11 @@ typeset LATE="$ROOT/late"
 function cleanup
 {
 	datasetexists "$LATE" && destroy_dataset "$LATE" "-r"
+	for ds in "${SUBTREE[@]}"; do
+		for bm in "$TESTBM" "$TESTBM2" "$TESTBM3" "$TESTBM4"; do
+			bkmarkexists "$ds#$bm" && destroy_dataset "$ds#$bm"
+		done
+	done
 	for ds in "$ROOT" "$OUTSIDE"; do
 		snapexists "$ds@$TESTSNAP" && destroy_dataset "$ds@$TESTSNAP" "-r"
 	done

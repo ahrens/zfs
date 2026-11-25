@@ -54,6 +54,13 @@ function restore_root_datasets # do_encrypt
 		password="password"
 	fi
 
+	# verify_fs_promote can leave $ROOT_TESTFS a clone of the clone it
+	# promoted. Promote it back, so that the destroy below removes that
+	# clone too.
+	if datasetexists "$ROOT_TESTFS" && \
+	    [[ $(get_prop origin "$ROOT_TESTFS") != "-" ]]; then
+		log_must zfs promote "$ROOT_TESTFS"
+	fi
 	destroy_dataset "$ROOT_TESTFS" "-Rf"
 	log_must eval "echo $password | zfs create $enc_args $ROOT_TESTFS"
 

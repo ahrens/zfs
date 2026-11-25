@@ -159,5 +159,6 @@ log_must eval "zfs send --redact book9 $POOL@snap >$stream"
 log_must eval "zfs recv $recvfs <$stream"
 compare_files $POOL $recvfs "f1" "$RANGE1"
 log_must zfs destroy -R $POOL@snap
+log_must zfs destroy $POOL#book9
 
 log_pass "Redaction works as expected for various scenarios."

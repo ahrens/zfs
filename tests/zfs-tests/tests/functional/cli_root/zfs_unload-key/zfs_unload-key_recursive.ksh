@@ -39,6 +39,8 @@ function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
 		destroy_dataset $TESTPOOL/$TESTFS1 -r
+	datasetexists $TESTPOOL/$TESTFS2 && \
+		destroy_dataset $TESTPOOL/$TESTFS2 -r
 }
 log_onexit cleanup
 

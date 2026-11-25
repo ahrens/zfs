@@ -35,6 +35,14 @@
 
 verify_runnable "both"
 
+function cleanup
+{
+	snapexists $TESTPOOL/$TESTFS@$TESTSNAP && \
+		destroy_dataset $TESTPOOL/$TESTFS@$TESTSNAP
+}
+
+log_onexit cleanup
+
 log_assert "'zfs rename' should fail with bad option, null target dataset and" \
 		"too long target dataset name."
 

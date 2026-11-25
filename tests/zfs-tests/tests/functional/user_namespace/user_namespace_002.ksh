@@ -39,6 +39,7 @@ user_ns_cleanup() {
 		sleep 1
 	fi
 	log_must zfs destroy -r $TESTPOOL/userns
+	datasetexists $TESTPOOL/user && log_must zfs destroy -r $TESTPOOL/user
 }
 
 log_onexit user_ns_cleanup

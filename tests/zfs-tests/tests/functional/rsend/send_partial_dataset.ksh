@@ -43,6 +43,7 @@ function cleanup
 	destroy_dataset $POOL/testfs2 "-r"
 	destroy_dataset $POOL/stream "-r"
 	destroy_dataset $POOL/recvfs "-r"
+	destroy_dataset $POOL/recvfullfs "-r"
 	destroy_dataset $POOL/partialfs "-r"
 }
 log_onexit cleanup

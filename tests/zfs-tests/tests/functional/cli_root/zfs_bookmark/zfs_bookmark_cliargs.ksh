@@ -55,6 +55,12 @@ function cleanup
 		destroy_dataset "$DATASET#$TESTBMCOPY"
 
 	log_must rm -f "$TEST_BASE_DIR/zfstest_datastream.$$"
+
+	# The test replaces setup's recv dataset with a received one, which
+	# has snapshots; put back an empty one.
+	datasetexists "$TESTPOOL/$TESTFS/recv" && \
+		destroy_dataset "$TESTPOOL/$TESTFS/recv" "-r"
+	log_must zfs create "$TESTPOOL/$TESTFS/recv"
 }
 
 log_assert "'zfs bookmark' should work only when passed valid arguments."

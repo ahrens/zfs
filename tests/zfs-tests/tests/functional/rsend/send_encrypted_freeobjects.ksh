@@ -66,6 +66,15 @@ keyfile=/$POOL/keyencfods
 f1=/$POOL/$sendds/f1
 f2=/$POOL/$sendds/f2
 
+function cleanup
+{
+	datasetexists $POOL/$recvds && destroy_dataset $POOL/$recvds -r
+	datasetexists $POOL/$sendds && destroy_dataset $POOL/$sendds -r
+	rm -f $keyfile
+}
+
+log_onexit cleanup
+
 log_must eval "echo 'password' > $keyfile"
 
 #

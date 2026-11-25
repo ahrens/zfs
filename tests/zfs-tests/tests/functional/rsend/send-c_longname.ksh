@@ -34,8 +34,15 @@
 
 verify_runnable "both"
 
+function cleanup
+{
+	cleanup_pool $POOL
+	cleanup_pool $POOL2
+	cleanup_pool $POOL3
+}
+
 log_assert "Verify that longnames are handled correctly in send stream."
-log_onexit cleanup_pool $POOL $POOL2 $POOL3
+log_onexit cleanup
 
 typeset sendfs=$POOL/sendfs
 typeset recvfs=$POOL2/recvfs

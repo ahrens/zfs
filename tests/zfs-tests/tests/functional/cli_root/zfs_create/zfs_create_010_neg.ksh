@@ -71,8 +71,11 @@ function cleanup
 			log_must zfs destroy -f $dset
 		fi
 	done
+
+	$created_vol && destroy_dataset $TESTPOOL/$TESTVOL
 }
 
+created_vol=false
 log_onexit cleanup
 
 log_assert "Verify 'zfs create [-s] [-b <blocksize> ] -V <size> <volume>' fails with" \
@@ -95,8 +98,10 @@ set -A args "$VOLSIZE" "$TESTVOL1" \
 
 set -A options "" "-s"
 
-datasetexists $TESTPOOL/$TESTVOL || \
-		log_must zfs create -V $VOLSIZE $TESTPOOL/$TESTVOL
+if ! datasetexists $TESTPOOL/$TESTVOL; then
+	log_must zfs create -V $VOLSIZE $TESTPOOL/$TESTVOL
+	created_vol=true
+fi
 
 set -A existed_fs $(zfs list -H | awk '$1 ~ /\// {print $1}')
 
