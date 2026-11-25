@@ -254,6 +254,12 @@ def unescape(field):
     return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), field)
 
 
+def escape(field):
+    """A name for a state line, which holds one mount: a newline and a
+    backslash as unescape() reads them."""
+    return field.replace('\\', '\\134').replace('\n', '\\012')
+
+
 def mounts():
     """Mounted file systems: [special, mountpoint, fstype]."""
     if UNAME == 'SunOS':
@@ -299,6 +305,18 @@ def disk_of(dev):
 @functools.lru_cache(maxsize=None)
 def test_disks():
     return [disk_of(disk) for disk in DISKS.split()]
+
+
+def is_whole_disk(dev):
+    """Is a DISKS entry a whole disk (or a file, loop or multipath device),
+    not a partition or a device on top of one?"""
+    if dev.startswith('/') and os.path.isfile(dev):
+        return True
+    if UNAME == 'Linux':
+        path = os.path.realpath(dev if dev.startswith('/') else '/dev/' + dev)
+        kind = out('lsblk', '-dno', 'TYPE', path).strip()
+        return kind in ('', 'disk', 'loop', 'mpath')
+    return disk_of(dev) == dev.split('/')[-1]
 
 
 def is_test_disk(dev):
@@ -399,10 +417,10 @@ def destroy_pool(pool):
 # line per item.
 
 def state_datasets(pools):
-    """The datasets, snapshots and bookmarks in the suite's pools."""
+    """The datasets, snapshots and bookmarks in the suite's pools that are
+    not suspended."""
     return ['dataset ' + name
             for pool in pools
-            if is_test_pool(pool) and not pool_suspended(pool)
             for name in lines(out('zfs', 'list', '-H', '-t', 'all', '-o',
                                   'name', '-r', pool))
             if re.search('[/@#]', name)]
@@ -432,7 +450,18 @@ def sunos_tunable_sizes(symbols, names):
 
 def sunos_tunable_list():
     """The size of each tunable, found once per run."""
-    if not read(TUNABLE_LIST):
+    try:
+        os.mkdir(HYGIENE_DIR, 0o755)
+    except FileExistsError:
+        pass
+    try:
+        st = os.lstat(HYGIENE_DIR)
+        trusted = (stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid() and
+                   not st.st_mode & 0o022)
+    except OSError:
+        trusted = False
+    sizes = lines(read(TUNABLE_LIST)) if trusted else []
+    if not sizes:
         # The kernel variables the tests change.  kmem_mtb_move is set with
         # mdb -kw by tests on some branches.
         names = {'kmem_mtb_move'}
@@ -440,9 +469,12 @@ def sunos_tunable_list():
             for path in find(top, stat.S_ISREG):
                 names.update(TUNABLE_USE.findall(read(path)))
         symbols = out('mdb', '-k', stdin='::nm\n')
-        os.makedirs(HYGIENE_DIR, exist_ok=True)
-        write(TUNABLE_LIST, sunos_tunable_sizes(symbols, names))
-    return {row[0]: row[1] for row in rows(read(TUNABLE_LIST))}
+        sizes = sunos_tunable_sizes(symbols, names)
+        if trusted:
+            write(TUNABLE_LIST, sizes)
+    # Only names go to mdb, where a line starting with ! runs a command.
+    return {row[0]: row[1] for row in rows('\n'.join(sizes))
+            if re.match('[a-z_0-9]+$', row[0])}
 
 
 def sunos_tunables(mdb_output):
@@ -487,7 +519,8 @@ def set_tunable(name, value):
 
 
 def zinject_handlers():
-    """The words of each zinject handler: its id, its pool, ..."""
+    """The words of each zinject handler: its id, its pool, ...; the last
+    ones count the I/O it matched."""
     handlers = [words(line) for line in lines(out('zinject'))]
     return [h for h in handlers if h and re.match('[0-9]+$', h[0])]
 
@@ -610,10 +643,17 @@ def state_arc():
 def state():
     """The state, sorted as sort does in the C locale."""
     pools = imported_pools()
+    test_pools = [pool for pool in pools if is_test_pool(pool)]
+    suspended = [pool for pool in test_pools if pool_suspended(pool)]
     found = (['pool ' + pool for pool in pools] +
-             state_datasets(pools) + state_tunables() + state_arc() +
-             ['zinject ' + ' '.join(h) for h in zinject_handlers()] +
-             ['mount %s %s %s' % mount for mount in other_mounts()] +
+             ['suspended ' + pool for pool in suspended] +
+             state_datasets([pool for pool in test_pools
+                             if pool not in suspended]) +
+             state_tunables() + state_arc() +
+             ['zinject %s %s' % tuple((h + [''])[:2])
+              for h in zinject_handlers()] +
+             ['mount %s %s %s' % tuple(escape(field) for field in mount)
+              for mount in other_mounts()] +
              state_devices() + state_misc())
     return sorted(set('\n'.join(found).split('\n')), key=os.fsencode)
 
@@ -692,7 +732,9 @@ def to_report(changes, base, group_base, reported, is_test):
             change.text.strip(' \t') in reported or
             # The datasets of a pool made or destroyed went with it.
             (change.kind == 'dataset' and
-             re.split('[/@#]', change.name)[0] in gone))
+             re.split('[/@#]', change.name)[0] in gone) or
+            # A leaked pool that is suspended is reported as a pool.
+            (change.kind == 'suspended' and change.name in gone))
 
     return [change for change in changes if not skip(change)]
 
@@ -735,10 +777,13 @@ def undo(change):
     op, name = '%s %s' % (change.what, change.kind), change.name
     if op == 'changed tunable':
         set_tunable(name, value(change.was))
-    elif op == 'leaked zinject':
+    elif op == 'leaked zinject':     # zinject <id> <pool>
+        owned((words(change.rest) + ['', ''])[1] not in KEEP_POOLS)
         must('zinject', '-c', name)
     elif op == 'leaked mount':      # mount <mountpoint> <fstype> <special>
-        mnt, _, special = change.rest.rsplit(' ', 2)
+        field = change.rest.rsplit(' ', 2)
+        owned(len(field) == 3)
+        mnt, _, special = [unescape(f) for f in field]
         owned(under_basedir(mnt) or is_test_vdev(special))
         must('umount', '-f', mnt)
     elif op == 'leaked dataset':
@@ -757,7 +802,7 @@ def undo(change):
     elif op == 'leaked process':
         # A test zed (zed_start()) left running.
         owned(name == 'zed')
-        must('pkill', '-f', 'zed .*-d %s/zed' % BASEDIR)
+        must('pkill', '-f', test_zed_pattern())
     elif op in ('leaked loop', 'leaked lofi'):      # <device> <file>
         owned(under_basedir(change.rest[len(name) + 1:]))
         must('losetup' if change.kind == 'loop' else 'lofiadm', '-d', name)
@@ -801,6 +846,11 @@ def undo_result(change):
         return ' (undo failed: %s)' % cut(error, 160) if error else ''
 
 
+def test_zed_pattern():
+    """How pgrep and pkill find a zed that zed_start() started."""
+    return 'zed .*-d %s/zed' % BASEDIR
+
+
 def ps(pid, column):
     """A column of ps for one process; nothing if it is gone."""
     return out('ps', '-o', column + '=', '-p', pid).rstrip('\n')
@@ -811,12 +861,14 @@ def check_processes(statefile, label, sid, report_only):
     jobs.  The runner starts each test in a session of its own."""
     zed_was_running = 'process zed' in lines(read(statefile))
     for pid in out('pgrep', '-s', sid).split():
+        args = ps(pid, 'args')
+        if not args:
+            continue        # It exited since pgrep.
         # A test may restart the zed that was running before it (zed_stop,
         # then zed_start).
         command = ps(pid, 'comm')
         if command in ('zed', 'lt-zed') and zed_was_running:
             continue
-        args = ps(pid, 'args')
         leak = '%s: leaked process %s %s' % (label, pid, cut(args, 100))
         if report_only:
             print(leak)
@@ -853,7 +905,20 @@ def check(statefile, label, sid='', group='', report_only=False):
     if sid:
         check_processes(statefile, label, sid, report_only)
 
-    now = state()
+    was = lines(read(statefile))
+
+    def state_held():
+        """The state, with the datasets of the pools that are suspended as
+        they were: they can't be listed, and when the pool resumes, the
+        ones that differ are the changes."""
+        new = state()
+        held = {line[len('suspended '):] for line in new
+                if line.startswith('suspended ')}
+        new += [line for line in was if line.startswith('dataset ') and
+                re.split('[/@#]', line[len('dataset '):])[0] in held]
+        return sorted(set(new), key=os.fsencode)
+
+    now = state_held()
     base = statefile + '.base'
     if not os.path.isfile(statefile):
         write(base, now)
@@ -870,14 +935,17 @@ def check(statefile, label, sid='', group='', report_only=False):
     if not report_only and still != was_reported:
         write(reported, still)
     changes = to_report(
-        state_diff(lines(read(statefile)), now), set(lines(read(base))),
+        state_diff(was, now), set(lines(read(base))),
         set(lines(read(group_base))), set(still),
         is_test=bool(sid))      # Only a test's check has a session id.
 
     def undo_order(change):
-        if change.kind in UNDO_ORDER:
-            return UNDO_ORDER.index(change.kind)
-        return len(UNDO_ORDER)
+        if change.kind not in UNDO_ORDER:
+            return (len(UNDO_ORDER), 0)
+        depth = 0
+        if change.kind == 'mount':      # Unmount the deepest first.
+            depth = -change.rest.rsplit(' ', 2)[0].count('/')
+        return (UNDO_ORDER.index(change.kind), depth)
 
     for change in sorted(changes, key=undo_order):
         if is_empty_testdir(change, remove=not report_only):
@@ -888,7 +956,7 @@ def check(statefile, label, sid='', group='', report_only=False):
         if result != UNDONE:
             write(reported, [text], mode='ab')
     # With no changes, nothing was undone or removed: the state is as found.
-    write(statefile, state() if changes and not report_only else now)
+    write(statefile, state_held() if changes and not report_only else now)
 
 
 class Preflight:
@@ -939,6 +1007,12 @@ class Preflight:
         dups = sorted({disk for disk in disks if disks.count(disk) > 1})
         if dups:
             self.problem('DISKS lists %s more than once' % ' '.join(dups))
+        # The suite takes the whole disk of each entry as its own.
+        for dev in DISKS.split():
+            if not is_whole_disk(dev):
+                self.problem('DISKS includes %s, which is not a whole disk; '
+                             'the suite would take all of %s' % (
+                                 dev, disk_of(dev)))
         if SUDO_USER in TEST_USERS:
             self.problem('the tests create and delete user %s; run the '
                          'suite as another user' % SUDO_USER)
@@ -995,7 +1069,9 @@ class Preflight:
                          'zinject', '-c', ident)
 
     def clean_mounts(self):
-        for mnt, fstype, dev in other_mounts():
+        # The deepest first: a file system mounted in another keeps it busy.
+        for mnt, fstype, dev in sorted(other_mounts(), reverse=True,
+                                       key=lambda m: m[0].count('/')):
             if under_basedir(mnt) or is_test_vdev(dev):
                 self.fix('%s mount of %s on %s' % (fstype, dev, mnt),
                          'umount', '-f', mnt)
@@ -1109,18 +1185,28 @@ class Preflight:
 
         # Tunables that save_tunable() saved and an aborted test did not
         # restore.
-        linux_names = {row[0]: row[2] for row in rows(
-            read(STF_SUITE + '/include/tunables.cfg'))}
+        column = {'FreeBSD': 1, 'Linux': 2}.get(UNAME)
+        names = {row[0]: row[column] for row in rows(
+            read(STF_SUITE + '/include/tunables.cfg'))} if column else {}
         for path in sorted(glob.glob(glob.escape(BASEDIR) + '/tunable-*')):
             if not os.path.isfile(path):
                 continue
-            name = linux_names.get(path.split('/tunable-')[-1])
-            if UNAME == 'Linux' and name:
-                old = read(path).rstrip('\n')
-                new = read(PARAMETERS % 'zfs' + '/' + name).rstrip('\n')
-                if new != old:
-                    self.fix('tunable %s is %s, saved %s' % (name, new, old),
-                             'set_tunable', 'zfs/' + name, old)
+            name = names.get(path.split('/tunable-')[-1], '')
+            if name in ('', 'UNSUPPORTED'):
+                self.problem('%s saves a tunable that this script cannot '
+                             'restore; restore it and remove the file' % path)
+                continue
+            if UNAME == 'Linux':
+                tunable = 'zfs/' + name
+                new = read(PARAMETERS % 'zfs' + '/' + name)
+            else:
+                tunable = 'vfs.zfs.' + name
+                new = out('sysctl', '-n', tunable)
+            old, new = read(path).rstrip('\n'), new.rstrip('\n')
+            if new != old and not self.fix(
+                    'tunable %s is %s, saved %s' % (tunable, new, old),
+                    'set_tunable', tunable, old):
+                continue        # Keep what it should be.
             self.fix('saved tunable file ' + path, 'rm', '-f', path)
 
     def clean_users(self):
@@ -1136,10 +1222,9 @@ class Preflight:
 
     def clean_files(self):
         base = glob.escape(BASEDIR)
-        # Test-run zed instances keep their pid file under $BASEDIR/zed.
-        pid = read(BASEDIR + '/zed/zed.pid').strip()
-        if pid and 'zed' in ps(pid, 'args'):
-            self.fix('test zed', 'kill', pid)
+        # A test zed (zed_start()) that an aborted run left running.
+        if ok('pgrep', '-f', test_zed_pattern()):
+            self.fix('test zed', 'pkill', '-f', test_zed_pattern())
         for pattern in ('testdir*', 'tempfile*', 'zed', 'zts-results.*'):
             for path in sorted(glob.glob(base + '/' + pattern)):
                 if not os.path.exists(path):
@@ -1151,8 +1236,9 @@ class Preflight:
                     self.fix('leftover ' + path, 'rm', '-rf', path)
         # zfs-tests.sh refuses to start if its vdev files exist; remove them
         # unless a pool or a loop device still uses them.
-        vdevs = [row[0] for row in rows(out('zpool', 'list', '-vHP'))]
-        used = '\n'.join(vdevs + state_devices())
+        used = {row[0] for row in rows(out('zpool', 'list', '-vHP'))}
+        for device in state_devices():
+            used.update(words(device))
         for path in sorted(glob.glob(base + '/file-vdev*')):
             if os.path.isfile(path) and path not in used:
                 self.fix('leftover vdev file ' + path, 'rm', '-f', path)

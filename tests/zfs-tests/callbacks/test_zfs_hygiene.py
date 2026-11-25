@@ -259,6 +259,11 @@ class FilterTest(HygieneTest):
             'leaked pool testpool', 'leaked dataset testpool2/fs',
             'removed pool gone', 'removed dataset kept/fs'])
 
+    def test_leaked_pool_that_is_suspended_is_a_leaked_pool(self):
+        changes = [('leaked', 'pool testpool2'),
+                   ('leaked', 'suspended testpool2')]
+        self.assertEqual(self.report(changes), ['leaked pool testpool2'])
+
     def test_pool_filtered_out_still_takes_its_datasets(self):
         changes = [('removed', 'pool early'), ('removed', 'dataset early/fs')]
         self.assertEqual(self.report(changes, group=['dataset early/fs']), [])
@@ -442,6 +447,28 @@ class UndoTest(HygieneTest):
         order = hy.UNDO_ORDER
         for kind in ('swap', 'dump'):
             self.assertLess(order.index(kind), order.index('dataset'))
+
+    def test_zinject_on_kept_pool_is_left(self):
+        self.commands['zinject -c 1'] = ''
+        self.commands['zinject -c 2'] = ''
+        self.assertFalse(self.undone('leaked', 'zinject 1 rpool'))
+        self.assertTrue(self.undone('leaked', 'zinject 2 testpool'))
+        self.assertEqual(self.ran, ['zinject -c 2'])
+
+    def test_mount_with_a_newline_in_its_name(self):
+        self.files['/proc/self/mounts'] = (
+            'tmpfs %s/a\\012b\\134 tmpfs rw 0 0\n' % self.base)
+        mnt = self.base + '/a\nb\\'
+        self.assertEqual(hy.other_mounts(), [(mnt, 'tmpfs', 'tmpfs')])
+        self.patch(state_tunables=lambda: [], state_arc=lambda: [],
+                   imported_pools=lambda: [], zinject_handlers=lambda: [],
+                   state_devices=lambda: [], state_misc=lambda: [])
+        line = 'mount %s/a\\012b\\134 tmpfs tmpfs' % self.base
+        self.assertEqual(hy.state(), [line])
+        self.commands['umount -f ' + mnt] = ''
+        self.assertTrue(self.undone('leaked', line))
+        self.assertEqual(self.ran, ['umount -f ' + mnt])
+        self.assertFalse(self.undone('leaked', 'mount ' + self.base + '/a'))
 
     def test_swap_on_test_devices(self):
         self.commands['swapoff /dev/zvol/testpool/swap'] = ''
@@ -639,7 +666,46 @@ class TunableTest(HygieneTest):
                          'zfs_flags 4\nkmem_mtb_move 8\n')
 
 
+class TunableListTest(HygieneTest):
+    def setUp(self):
+        super().setUp()
+        self.patch(UNAME='SunOS', STF_SUITE=self.tmp + '/suite')
+        os.makedirs(self.tmp + '/suite/tests')
+        self.commands['mdb -k'] = (
+            '0x1|0x0000000000000004|OBJT |GLOB |0x0  |19      |zfs_flags\n')
+        hy.write(self.tmp + '/suite/tests/t.ksh', ['set_tunable32 zfs_flags'])
+
+    def test_list_in_a_directory_others_can_write_is_not_used(self):
+        os.mkdir(hy.HYGIENE_DIR, 0o777)
+        os.chmod(hy.HYGIENE_DIR, 0o777)
+        hy.write(hy.TUNABLE_LIST, ['!/tmp/x; 4', 'zfs_a 4'])
+        self.assertEqual(hy.sunos_tunable_list(), {'zfs_flags': '4'})
+        self.assertEqual(hy.lines(hy.read(hy.TUNABLE_LIST)),
+                         ['!/tmp/x; 4', 'zfs_a 4'])
+
+    def test_symlink_is_not_used(self):
+        os.mkdir(self.tmp + '/elsewhere')
+        os.symlink(self.tmp + '/elsewhere', hy.HYGIENE_DIR)
+        self.assertEqual(hy.sunos_tunable_list(), {'zfs_flags': '4'})
+        self.assertEqual(os.listdir(self.tmp + '/elsewhere'), [])
+
+    def test_only_names_go_to_mdb(self):
+        os.mkdir(hy.HYGIENE_DIR, 0o755)
+        hy.write(hy.TUNABLE_LIST, ['!/tmp/x; 4', 'zfs_a 4'])
+        self.assertEqual(hy.sunos_tunable_list(), {'zfs_a': '4'})
+
+
 class StateTest(HygieneTest):
+    def test_suspended_pool(self):
+        self.pool('testpool', '/dev/sdb1')
+        self.commands['zpool status testpool'] = 'pool is suspended\n'
+        self.patch(state_tunables=lambda: [], state_arc=lambda: [],
+                   other_mounts=lambda: [], state_devices=lambda: [],
+                   state_misc=lambda: [])
+        self.assertEqual(hy.state(), ['pool testpool',
+                                      'suspended testpool'])
+        self.assertNotIn('zfs list -H -t all -o name -r testpool', self.ran)
+
     def test_linux_state(self):
         self.pool('rpool', '/dev/sda1')
         self.pool('testpool', '/dev/sdb1')
@@ -674,7 +740,7 @@ class StateTest(HygieneTest):
             'mount %s/t tmpfs tmpfs' % self.base, 'pool rpool',
             'pool testpool', 'share /testpool/fs', 'swap /dev/sda2',
             'user # comment ', 'user root /root',
-            'zinject 1 testpool 0'])
+            'zinject 1 testpool'])
 
     def test_illumos_and_freebsd_devices(self):
         self.patch(UNAME='SunOS')
@@ -836,6 +902,52 @@ class CheckTest(HygieneTest):
             'tests/a/b: leaked process 12 dd ' + 'x' * 97])
         self.assertNotIn('kill -9 11', self.ran)
 
+    def test_suspended_pool_keeps_its_datasets(self):
+        self.now += ['pool testpool', 'dataset testpool/fs']
+        self.check()
+        # A test suspends the pool: its datasets can't be listed.
+        self.now.remove('dataset testpool/fs')
+        self.now.append('suspended testpool')
+        self.assertEqual(self.check(),
+                         ['tests/a/b: leaked suspended testpool'])
+        self.assertIn('dataset testpool/fs', hy.lines(hy.read(self.statefile)))
+        # The next one resumes it and leaks a dataset.
+        self.now.remove('suspended testpool')
+        self.now += ['dataset testpool/fs', 'dataset testpool/leak']
+        self.commands['zfs list -t all testpool/leak'] = ''
+        self.commands['zfs destroy -Rf testpool/leak'] = ''
+        self.assertEqual(self.check(), [
+            'tests/a/b: leaked dataset testpool/leak (undone)'])
+
+    def test_process_gone_after_pgrep(self):
+        self.check()
+        self.commands['pgrep -s 77'] = '13\n'
+        self.assertEqual(self.check('77', self.groupfile), [])
+        self.assertNotIn('kill -9 13', self.ran)
+        self.assertEqual(self.check('77', self.groupfile, report_only=True),
+                         [])
+
+    def test_nested_leaked_mounts_undone_deepest_first(self):
+        self.check()
+        for mnt in ('mnt', 'mnt/sub'):
+            self.now.append('mount %s/%s tmpfs tmpfs' % (self.base, mnt))
+            self.commands['umount -f %s/%s' % (self.base, mnt)] = ''
+        self.check()
+        umounts = [cmd for cmd in self.ran if cmd.startswith('umount')]
+        self.assertEqual(umounts, ['umount -f %s/mnt/sub' % self.base,
+                                   'umount -f %s/mnt' % self.base])
+
+    def test_zinject_handler_counts_io(self):
+        self.patch(state=hy.state, imported_pools=lambda: [],
+                   state_tunables=lambda: [], state_arc=lambda: [],
+                   other_mounts=lambda: [], state_devices=lambda: [],
+                   state_misc=lambda: [])
+        self.commands['zinject'] = '  1  rpool  0  0  0  data  0  0\n'
+        self.check()
+        self.commands['zinject'] = '  1  rpool  0  0  0  data  12  3\n'
+        self.assertEqual(self.check(), [])
+        self.assertNotIn('zinject -c 1', self.ran)
+
 
 class PreflightTest(HygieneTest):
     def preflight(self, step, dryrun=False):
@@ -960,7 +1072,7 @@ class PreflightTest(HygieneTest):
         self.commands['rm -f ' + saved] = ''
         _, output = self.preflight('clean_tunables')
         self.assertEqual(output, [
-            'zfs_hygiene: cleaned: tunable zfs_arc_max is 5, saved 0 '
+            'zfs_hygiene: cleaned: tunable zfs/zfs_arc_max is 5, saved 0 '
             '(set_tunable zfs/zfs_arc_max 0)',
             'zfs_hygiene: cleaned: saved tunable file %s (rm -f %s)' % (
                 saved, saved)])
@@ -982,7 +1094,84 @@ class PreflightTest(HygieneTest):
             'zfs_hygiene: cleaned: leftover testdir1)',
             'zfs_hygiene: PROBLEM: leftover testdir2 has a file system '
             'mounted in it',
+            'zfs_hygiene: cleaned: leftover vdev file file-vdev1)',
             'zfs_hygiene: cleaned: leftover vdev file file-vdev2)'])
+
+    def test_test_zed_left_running(self):
+        pattern = 'zed .*-d %s/zed' % self.base
+        self.commands['pgrep -f ' + pattern] = '1432\n'
+        self.commands['pkill -f ' + pattern] = ''
+        _, output = self.preflight('clean_files')
+        self.assertIn('zfs_hygiene: cleaned: test zed (pkill -f %s)' % pattern,
+                      output)
+        # A stale pid file is not used.
+        os.makedirs(self.base + '/zed')
+        hy.write(self.base + '/zed/zed.pid', ['1'])
+        del self.commands['pgrep -f ' + pattern]
+        self.ran = []
+        self.preflight('clean_files')
+        self.assertFalse([cmd for cmd in self.ran if 'kill' in cmd])
+
+    def test_saved_tunables_on_freebsd_and_illumos(self):
+        self.patch(UNAME='FreeBSD')
+        cfg = hy.STF_SUITE + '/include/tunables.cfg'
+        self.files[cfg] = ('ARC_MAX\tarc.max\tzfs_arc_max\n'
+                           'ONLY_LINUX\tUNSUPPORTED\tzfs_x\n')
+        saved = self.base + '/tunable-ARC_MAX'
+        other = self.base + '/tunable-ONLY_LINUX'
+        hy.write(saved, ['0'])
+        hy.write(other, ['1'])
+        self.commands['sysctl -n vfs.zfs.arc.max'] = '5\n'
+        self.commands['sysctl vfs.zfs.arc.max=0'] = ''
+        self.commands['rm -f ' + saved] = ''
+        preflight, output = self.preflight('clean_tunables')
+        self.assertEqual(output, [
+            'zfs_hygiene: cleaned: tunable vfs.zfs.arc.max is 5, saved 0 '
+            '(set_tunable vfs.zfs.arc.max 0)',
+            'zfs_hygiene: cleaned: saved tunable file %s (rm -f %s)' % (
+                saved, saved),
+            'zfs_hygiene: PROBLEM: %s saves a tunable that this script '
+            'cannot restore; restore it and remove the file' % other])
+        # A failed restore keeps the file.
+        self.commands['sysctl vfs.zfs.arc.max=0'] = (1, '', 'denied')
+        self.ran = []
+        preflight, output = self.preflight('clean_tunables')
+        self.assertNotIn('rm -f ' + saved, self.ran)
+        self.assertEqual(preflight.problems, 2)
+        # Nothing to restore it with on illumos.
+        self.patch(UNAME='SunOS')
+        self.ran = []
+        preflight, _ = self.preflight('clean_tunables')
+        self.assertEqual(preflight.problems, 2)
+        self.assertNotIn('rm -f ' + saved, self.ran)
+
+    def test_nested_mounts_deepest_first(self):
+        self.files['/proc/self/mounts'] = (
+            '/dev/sdc1 %s/mnt ext4 rw 0 0\ntmpfs %s/mnt/sub tmpfs rw 0 0\n'
+            % (self.base, self.base))
+        self.commands['umount -f %s/mnt' % self.base] = ''
+        self.commands['umount -f %s/mnt/sub' % self.base] = ''
+        self.preflight('clean_mounts')
+        self.assertEqual(self.ran, ['umount -f %s/mnt/sub' % self.base,
+                                    'umount -f %s/mnt' % self.base])
+
+    def test_partition_in_disks(self):
+        self.patch(DISKS='sdb sdc1 loop0 %s/file-vdev0' % self.base)
+        open(self.base + '/file-vdev0', 'w').close()
+        self.commands['lsblk -dno TYPE /dev/sdb'] = 'disk\n'
+        self.commands['lsblk -dno TYPE /dev/sdc1'] = 'part\n'
+        self.commands['lsblk -dno TYPE /dev/loop0'] = 'loop\n'
+        self.commands['df -k ' + self.base] = ''
+        _, output = self.preflight('check_env')
+        self.assertEqual(output, [
+            'zfs_hygiene: PROBLEM: DISKS includes sdc1, which is not a whole '
+            'disk; the suite would take all of sdc'])
+        self.patch(UNAME='FreeBSD', DISKS='da1 da2p1',
+                   disk_of=REAL['disk_of'])
+        _, output = self.preflight('check_env')
+        self.assertEqual(output, [
+            'zfs_hygiene: PROBLEM: DISKS includes da2p1, which is not a whole '
+            'disk; the suite would take all of da2'])
 
     def test_env(self):
         self.patch(DISKS='sdb sdc1 sdc2', SUDO_USER='zfstest')
