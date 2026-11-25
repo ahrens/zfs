@@ -327,10 +327,11 @@ def is_test_vdev(path):
         return bool(pool) and pool not in KEEP_POOLS
     if path.startswith(('/dev/loop', '/dev/lofi/', '/dev/md')):
         return under_basedir(backing_file(path))
-    if is_test_disk(path):
+    disk = disk_of(path)
+    if disk and disk in test_disks():
         return True
     if UNAME == 'Linux':
-        model = read('/sys/block/%s/device/model' % disk_of(path))
+        model = read('/sys/block/%s/device/model' % disk)
         return model.startswith('scsi_debug')
     return False
 
@@ -358,6 +359,11 @@ def is_test_pool(pool):
     return bool(vdevs) and strong
 
 
+def is_test_home(user, home):
+    """Is this the home directory that add_user() gives a test user?"""
+    return home in [homes + '/' + user for homes in TEST_HOMES]
+
+
 def uses_test_disk(pool):
     return any(is_test_disk(vdev) for vdev in pool_vdevs(pool))
 
@@ -367,6 +373,10 @@ def pool_suspended(pool):
     return bool(re.search(
         'faulted in response to IO failures|pool is suspended',
         out('zpool', 'status', pool)))
+
+
+def pool_health(pool):
+    return out('zpool', 'list', '-H', '-o', 'health', pool).strip()
 
 
 def destroy_pool(pool):
@@ -379,7 +389,7 @@ def destroy_pool(pool):
         run('zpool', 'clear', pool, timeout=60)
         if pool_suspended(pool):
             raise Failed('pool %s is suspended' % pool)
-    health = out('zpool', 'list', '-H', '-o', 'health', pool).strip()
+    health = pool_health(pool)
     if health not in ('ONLINE', 'DEGRADED'):
         raise Failed('pool %s is %s' % (pool, health))
     must('zpool', 'destroy', '-f', pool, timeout=300)
@@ -388,10 +398,10 @@ def destroy_pool(pool):
 # The state a test must leave as it found it, one "<type> <name> [value]"
 # line per item.
 
-def state_datasets():
+def state_datasets(pools):
     """The datasets, snapshots and bookmarks in the suite's pools."""
     return ['dataset ' + name
-            for pool in imported_pools()
+            for pool in pools
             if is_test_pool(pool) and not pool_suspended(pool)
             for name in lines(out('zfs', 'list', '-H', '-t', 'all', '-o',
                                   'name', '-r', pool))
@@ -403,10 +413,8 @@ def linux_tunable(name, text):
     choice like "cycle [fastest] original", keep the choice."""
     if name in UNSTABLE_TUNABLES:
         return []
-    choices = [(re.match(r'.*\[([^]]*)\]', value), value)
-               for value in lines(text) if value]
-    return ['tunable %s %s' % (name, choice.group(1) if choice else value)
-            for choice, value in choices]
+    return ['tunable %s %s' % (name, re.sub(r'.*\[([^]]*)\].*', r'\1', value))
+            for value in lines(text) if value]
 
 
 def sunos_tunable_sizes(symbols, names):
@@ -432,6 +440,7 @@ def sunos_tunable_list():
             for path in find(top, stat.S_ISREG):
                 names.update(TUNABLE_USE.findall(read(path)))
         symbols = out('mdb', '-k', stdin='::nm\n')
+        os.makedirs(HYGIENE_DIR, exist_ok=True)
         write(TUNABLE_LIST, sunos_tunable_sizes(symbols, names))
     return {row[0]: row[1] for row in rows(read(TUNABLE_LIST))}
 
@@ -519,6 +528,11 @@ def dump_devices():
             if row[:2] == ['Dump', 'device:']]
 
 
+def lofi_devices():
+    """[device, backing file] for each lofi device."""
+    return [row[:2] for row in rows(out('lofiadm'), skip=1)]
+
+
 def state_devices():
     state = ['swap ' + dev for dev in swap_devices()]
     state += ['dump ' + dev for dev in dump_devices()]
@@ -532,8 +546,7 @@ def state_devices():
         # regular file there that udev never replaces.
         state += ['zvolfile ' + f for f in find('/dev/zvol', stat.S_ISREG)]
     elif UNAME == 'SunOS':
-        state += ['lofi %s %s' % (row[0], row[1])
-                  for row in rows(out('lofiadm'), skip=1)]
+        state += ['lofi %s %s' % tuple(lofi) for lofi in lofi_devices()]
     else:
         state += ['md %s %s' % (row[0], row[3])
                   for row in rows(out('mdconfig', '-lv'))]
@@ -596,8 +609,9 @@ def state_arc():
 
 def state():
     """The state, sorted as sort does in the C locale."""
-    found = (['pool ' + pool for pool in imported_pools()] +
-             state_datasets() + state_tunables() + state_arc() +
+    pools = imported_pools()
+    found = (['pool ' + pool for pool in pools] +
+             state_datasets(pools) + state_tunables() + state_arc() +
              ['zinject ' + ' '.join(h) for h in zinject_handlers()] +
              ['mount %s %s %s' % mount for mount in other_mounts()] +
              state_devices() + state_misc())
@@ -631,6 +645,8 @@ class Change:
     def __init__(self, what, line, was=None):
         self.what, self.line, self.was = what, line, was
         self.kind, self.name = (words(line) + ['', ''])[:2]
+        # The line without its type: "<name> [value]".
+        self.rest = line[len(self.kind) + 1:]
         self.text = '%s %s' % (what, line)
         if what == 'changed':
             self.text = 'changed %s %s -> %s' % (
@@ -717,19 +733,18 @@ def undo(change):
     back, and remove what the test added and the suite owns.  Raise Failed
     if it was not undone."""
     op, name = '%s %s' % (change.what, change.kind), change.name
-    field = words(change.line) + ['', '']
     if op == 'changed tunable':
         set_tunable(name, value(change.was))
     elif op == 'leaked zinject':
         must('zinject', '-c', name)
     elif op == 'leaked mount':      # mount <mountpoint> <fstype> <special>
-        mnt, _, special = change.line[len('mount '):].rsplit(' ', 2)
+        mnt, _, special = change.rest.rsplit(' ', 2)
         owned(under_basedir(mnt) or is_test_vdev(special))
         must('umount', '-f', mnt)
     elif op == 'leaked dataset':
         # Names may have spaces.  Its descendants and clones are leaks
         # too, and may be gone already.
-        dataset = change.line[len('dataset '):]
+        dataset = change.rest
         if ok('zfs', 'list', '-t', 'all', dataset):
             recurse = [] if '#' in dataset else ['-Rf']
             must('zfs', 'destroy', *(recurse + [dataset]))
@@ -744,14 +759,14 @@ def undo(change):
         owned(name == 'zed')
         must('pkill', '-f', 'zed .*-d %s/zed' % BASEDIR)
     elif op in ('leaked loop', 'leaked lofi'):      # <device> <file>
-        owned(under_basedir(change.line[len(change.kind + name) + 2:]))
+        owned(under_basedir(change.rest[len(name) + 1:]))
         must('losetup' if change.kind == 'loop' else 'lofiadm', '-d', name)
     elif op == 'leaked swap':
         owned(is_test_vdev(name))
         must(*(['swap', '-d'] if UNAME == 'SunOS' else ['swapoff']), name)
     elif op == 'leaked user':       # user <name> <home>
-        home = field[2]
-        owned(home in [homes + '/' + name for homes in TEST_HOMES])
+        home = (words(change.line) + ['', ''])[2]
+        owned(is_test_home(name, home))
         del_account('user', name)
         must('rm', '-rf', home)
     elif op == 'leaked group':
@@ -765,7 +780,7 @@ def undo(change):
     elif op == 'leaked file':
         # Only what the tests (root or a test user) or the runner's user
         # made, and not if something is mounted in it.
-        path = BASEDIR + '/' + change.line[len('file '):]
+        path = BASEDIR + '/' + change.rest
         owned(file_owner(path) in ['root', SUDO_USER] + TEST_USERS)
         owned(not mounted_under(path))
         must('rm', '-rf', path)
@@ -786,6 +801,11 @@ def undo_result(change):
         return ' (undo failed: %s)' % cut(error, 160) if error else ''
 
 
+def ps(pid, column):
+    """A column of ps for one process; nothing if it is gone."""
+    return out('ps', '-o', column + '=', '-p', pid).rstrip('\n')
+
+
 def check_processes(statefile, label, sid, report_only):
     """Report and kill the processes a test left running, e.g. background
     jobs.  The runner starts each test in a session of its own."""
@@ -793,10 +813,10 @@ def check_processes(statefile, label, sid, report_only):
     for pid in out('pgrep', '-s', sid).split():
         # A test may restart the zed that was running before it (zed_stop,
         # then zed_start).
-        command = out('ps', '-o', 'comm=', '-p', pid).rstrip('\n')
+        command = ps(pid, 'comm')
         if command in ('zed', 'lt-zed') and zed_was_running:
             continue
-        args = out('ps', '-o', 'args=', '-p', pid).rstrip('\n')
+        args = ps(pid, 'args')
         leak = '%s: leaked process %s %s' % (label, pid, cut(args, 100))
         if report_only:
             print(leak)
@@ -809,9 +829,9 @@ def check_processes(statefile, label, sid, report_only):
             time.sleep(0.5)
         if ok('kill', '-0', pid):
             print('%s (undo failed: still running, state %s)' % (
-                leak, out('ps', '-o', 's=', '-p', pid).rstrip('\n')))
+                leak, ps(pid, 's')))
         else:
-            print(leak + ' (undone)')
+            print(leak + UNDONE)
 
 
 def is_empty_testdir(change, remove):
@@ -819,11 +839,12 @@ def is_empty_testdir(change, remove):
     does no harm.  Remove it, without a report."""
     if not change.text.startswith('leaked file testdir'):
         return False
-    path = BASEDIR + '/' + change.line[len('file '):]
+    path = BASEDIR + '/' + change.rest
     try:
         if remove:
             os.rmdir(path)
-        return remove or not (os.path.islink(path) or os.listdir(path))
+            return True
+        return not (os.path.islink(path) or os.listdir(path))
     except OSError:
         return False
 
@@ -832,15 +853,13 @@ def check(statefile, label, sid='', group='', report_only=False):
     if sid:
         check_processes(statefile, label, sid, report_only)
 
-    os.makedirs(HYGIENE_DIR, exist_ok=True)
     now = state()
+    base = statefile + '.base'
     if not os.path.isfile(statefile):
-        write(statefile + '.base', now)
+        write(base, now)
         write(statefile, now)
         return
 
-    # A test's check is the one with a session id.
-    base = statefile + '.base'
     group_base = group + '.base'
     if not os.path.isfile(group_base):
         group_base = base
@@ -852,7 +871,8 @@ def check(statefile, label, sid='', group='', report_only=False):
         write(reported, still)
     changes = to_report(
         state_diff(lines(read(statefile)), now), set(lines(read(base))),
-        set(lines(read(group_base))), set(still), bool(sid))
+        set(lines(read(group_base))), set(still),
+        is_test=bool(sid))      # Only a test's check has a session id.
 
     def undo_order(change):
         if change.kind in UNDO_ORDER:
@@ -867,7 +887,8 @@ def check(statefile, label, sid='', group='', report_only=False):
         print('%s: %s%s' % (label, text, result))
         if result != UNDONE:
             write(reported, [text], mode='ab')
-    write(statefile, now if report_only else state())
+    # With no changes, nothing was undone or removed: the state is as found.
+    write(statefile, state() if changes and not report_only else now)
 
 
 class Preflight:
@@ -992,7 +1013,7 @@ class Preflight:
                 continue
             # Move it to the dump zvol of a pool that stays.
             kept = [path for path in sorted(glob.glob('/dev/zvol/dsk/*/dump'))
-                    if path.split('/')[4] in KEEP_POOLS]
+                    if zvol_pool(path) in KEEP_POOLS]
             if kept:
                 self.fix('dump device on ' + dev, 'dumpadm', '-d', kept[0])
             else:
@@ -1008,8 +1029,7 @@ class Preflight:
                 if (pool in KEEP_POOLS or pool in done or
                         not is_test_pool(pool)):
                     continue
-                health = out('zpool', 'list', '-H', '-o', 'health',
-                             pool).strip()
+                health = pool_health(pool)
                 if pool_suspended(pool):
                     health = 'SUSPENDED'
                 if health in ('ONLINE', 'DEGRADED'):
@@ -1041,7 +1061,7 @@ class Preflight:
                 self.fix('regular file %s in /dev/zvol' % path,
                          'rm', '-f', path)
         elif UNAME == 'SunOS':
-            for dev, backing in [r[:2] for r in rows(out('lofiadm'), skip=1)]:
+            for dev, backing in lofi_devices():
                 if under_basedir(backing):
                     self.fix('lofi device %s on %s' % (dev, backing),
                              'lofiadm', '-d', dev)
@@ -1105,8 +1125,7 @@ class Preflight:
 
     def clean_users(self):
         for user, home in accounts():
-            if user != SUDO_USER and home in [
-                    homes + '/' + user for homes in TEST_HOMES]:
+            if user != SUDO_USER and is_test_home(user, home):
                 self.fix('test user ' + user, 'del_account', 'user', user)
                 if os.path.isdir(home):
                     self.fix('home of test user ' + user, 'rm', '-rf', home)
@@ -1119,7 +1138,7 @@ class Preflight:
         base = glob.escape(BASEDIR)
         # Test-run zed instances keep their pid file under $BASEDIR/zed.
         pid = read(BASEDIR + '/zed/zed.pid').strip()
-        if pid and 'zed' in out('ps', '-o', 'args=', '-p', pid):
+        if pid and 'zed' in ps(pid, 'args'):
             self.fix('test zed', 'kill', pid)
         for pattern in ('testdir*', 'tempfile*', 'zed', 'zts-results.*'):
             for path in sorted(glob.glob(base + '/' + pattern)):
@@ -1192,7 +1211,6 @@ def main(argv):
     elif command == 'check' and 2 <= len(args) <= 4:
         check(*args, report_only=report_only)
     elif command == 'state':
-        os.makedirs(HYGIENE_DIR, exist_ok=True)
         print('\n'.join(state()))
     else:
         sys.stderr.write(
