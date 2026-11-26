@@ -651,7 +651,10 @@ class TunableTest(HygieneTest):
     def test_illumos_state(self):
         self.patch(UNAME='SunOS', STF_SUITE=self.tmp + '/suite')
         os.makedirs(self.tmp + '/suite/tests/functional')
-        os.makedirs(self.tmp + '/hygiene')
+        # Not writable by others, whatever the umask: the list is kept
+        # only in a directory that no one else can write.
+        os.mkdir(hy.HYGIENE_DIR, 0o755)
+        os.chmod(hy.HYGIENE_DIR, 0o755)
         hy.write(self.tmp + '/suite/tests/functional/t.ksh',
                  ['log_must set_tunable32 zfs_flags 1'])
         self.commands['mdb -k'] = (
