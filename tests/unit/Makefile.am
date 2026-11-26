@@ -34,6 +34,13 @@ EXTRA_TESTS = \
 
 noinst_PROGRAMS = $(UNIT_TESTS) $(EXTRA_TESTS)
 
+# Python unit tests, each a test_<name>.py that runs with unittest in its own
+# directory.
+if USING_PYTHON
+UNIT_PY_TESTS = \
+	$(top_srcdir)/tests/zfs-tests/callbacks/test_zfs_hygiene.py
+endif
+
 
 %C%_test_zap_CFLAGS = $(AM_CFLAGS)
 
@@ -260,7 +267,20 @@ _UNIT_FIND_TARGET = \
 _UNIT_TARGETS = $(if $(T), \
 	$(call _UNIT_FIND_TARGET, $(T)), $(call _UNIT_ALL_TARGETS))
 
-unit: $(addprefix _unit_run_, $(_UNIT_TARGETS))
+_UNIT_PY_TARGETS = $(if $(T), \
+	$(filter %/test_$(T).py, $(UNIT_PY_TESTS)), $(UNIT_PY_TESTS))
+
+PHONY += _unit_py_run
+_unit_py_run:
+	@for t in $(_UNIT_PY_TARGETS); do \
+		echo "  UNITTEST $$t"; \
+		(cd "$$(dirname "$$t")" && \
+		    $(PYTHON) -B -m unittest "$$(basename "$$t" .py)") || \
+		    exit 1; \
+	done
+
+unit: $(addprefix _unit_run_, $(_UNIT_TARGETS)) \
+    $(if $(_UNIT_PY_TARGETS), _unit_py_run)
 	@$(if $^, true, echo "ERROR: couldn't find unit test: $(T)" && false)
 
 if CODE_COVERAGE_ENABLED

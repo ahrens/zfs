@@ -36,6 +36,11 @@ $ make unit T=zap
   ...
 ```
 
+When configure finds Python, `make unit` also runs the Python unit tests
+listed in `UNIT_PY_TESTS`, such as
+`tests/zfs-tests/callbacks/test_zfs_hygiene.py` (`make unit T=zfs_hygiene`).
+Each runs with `unittest` in the directory of its test file.
+
 The test binaries are just normal programs in `./tests/unit`, and can be run
 directly. This is useful for debugging with `gdb`.
 
