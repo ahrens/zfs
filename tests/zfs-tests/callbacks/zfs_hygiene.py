@@ -503,8 +503,10 @@ def state_tunables():
                 for line in linux_tunable(
                     f'{module}/{os.path.basename(path)}', read(path))]
     if UNAME == 'FreeBSD':
+        # -W leaves out the read-only ones, such as counters, which no test
+        # can set.
         return [f"tunable {line.replace('=', ' ', 1)}"
-                for line in lines(out('sysctl', '-e', 'vfs.zfs'))]
+                for line in lines(out('sysctl', '-W', '-e', 'vfs.zfs'))]
     if UNAME == 'SunOS':
         formats = {'4': 'X', '8': 'J'}
         prints = [f'{name}/{formats[size]}\n'

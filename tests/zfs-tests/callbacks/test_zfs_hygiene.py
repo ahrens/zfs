@@ -612,11 +612,11 @@ class TunableTest(HygieneTest):
 
     def test_freebsd_state(self):
         self.patch(UNAME='FreeBSD')
-        self.commands['sysctl -e vfs.zfs'] = (
-            'vfs.zfs.arc.max=0\nvfs.zfs.version.module=v2=x\n')
+        self.commands['sysctl -W -e vfs.zfs'] = (
+            'vfs.zfs.arc.max=0\nvfs.zfs.debugflags=a=b\n')
         self.assertEqual(hy.state_tunables(), [
             'tunable vfs.zfs.arc.max 0',
-            'tunable vfs.zfs.version.module v2=x'])
+            'tunable vfs.zfs.debugflags a=b'])
 
     def test_illumos_names_used_by_the_tests(self):
         script = ('log_must set_tunable64 zfs_arc_max 0\n'
