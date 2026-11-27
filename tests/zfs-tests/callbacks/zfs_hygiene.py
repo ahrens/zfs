@@ -1065,12 +1065,6 @@ class Preflight:
         if SUDO_USER in TEST_USERS:
             self.problem('the tests create and delete user %s; run the '
                          'suite as another user' % SUDO_USER)
-        # The trim and initialize tests measure file vdevs with du.
-        comp = out('zfs', 'list', '-H', '-o', 'compression', BASEDIR).strip()
-        if comp not in ('', 'off'):
-            msg('note: %s is on a ZFS file system with compression=%s; '
-                'tests that check the space their file vdevs use (e.g. '
-                'zpool_trim_verify_trimmed) will fail' % (BASEDIR, comp))
         df = words((lines(out('df', '-k', BASEDIR)) or [''])[-1])
         avail = df[-3] if len(df) > 2 else ''
         if re.match('[0-9]+$', avail) and int(avail) < 2 * 1024 * 1024:
