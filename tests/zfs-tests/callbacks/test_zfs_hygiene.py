@@ -1095,7 +1095,7 @@ class PreflightTest(HygieneTest):
                 '/dev/da1', '/dev/da1p1', '/dev/da1s1a', '/dev/da10',
                 '/dev/da10p1']):
             self.patch(disk_of=REAL['disk_of'])
-            self.assertEqual(hy.Preflight.disk_paths('da1'),
+            self.assertEqual(hy.disk_paths('da1'),
                              ['/dev/da1', '/dev/da1p1', '/dev/da1s1a'])
 
     def test_users_and_groups(self):
@@ -1165,7 +1165,7 @@ class PreflightTest(HygieneTest):
         self.preflight('clean_files')
         self.assertFalse([cmd for cmd in self.ran if 'kill' in cmd])
 
-    def test_saved_tunables_on_freebsd_and_illumos(self):
+    def test_saved_tunables_on_freebsd(self):
         self.patch(UNAME='FreeBSD')
         cfg = hy.STF_SUITE + '/include/tunables.cfg'
         self.files[cfg] = ('ARC_MAX\tarc.max\tzfs_arc_max\n'
@@ -1191,12 +1191,11 @@ class PreflightTest(HygieneTest):
         preflight, output = self.preflight('clean_tunables')
         self.assertNotIn('rm -f ' + saved, self.ran)
         self.assertEqual(preflight.problems, 2)
-        # Nothing to restore it with on illumos.
+        # illumos has no save_tunable(), so it looks for no saved files.
         self.patch(UNAME='SunOS')
         self.ran = []
-        preflight, _ = self.preflight('clean_tunables')
-        self.assertEqual(preflight.problems, 2)
-        self.assertNotIn('rm -f ' + saved, self.ran)
+        preflight, output = self.preflight('clean_tunables')
+        self.assertEqual((output, preflight.problems, self.ran), ([], 0, []))
 
     def test_nested_mounts_deepest_first(self):
         self.files['/proc/self/mounts'] = (

@@ -1008,6 +1008,21 @@ def uses_test_disk(pool):
     return any(is_test_disk(vdev) for vdev in pool_vdevs(pool))
 
 
+def disk_paths(disk):
+    """The device paths of a disk and its partitions or slices."""
+    if UNAME == 'Linux':
+        return out('lsblk', '-lnpo', 'NAME', '/dev/' + disk).split()
+    if UNAME == 'SunOS':
+        slices = ['/dev/rdsk/%ss%d' % (disk, s)
+                  for s in (0, 1, 2, 3, 4, 5, 6, 8)]
+        return (['/dev/rdsk/%sp0' % disk] +
+                [path for path in slices if os.path.exists(path)])
+    if UNAME == 'FreeBSD':
+        return sorted(path for path in glob.glob('/dev/%s*' %
+                                                 glob.escape(disk))
+                      if disk_of(path) == disk)
+
+
 class Preflight:
     """The pre-flight checks."""
 
@@ -1188,25 +1203,11 @@ class Preflight:
                     self.fix('md device %s on %s' % (dev, backing),
                              'mdconfig', '-d', '-u', dev)
 
-    @staticmethod
-    def disk_paths(disk):
-        if UNAME == 'Linux':
-            return out('lsblk', '-lnpo', 'NAME', '/dev/' + disk).split()
-        if UNAME == 'SunOS':
-            slices = ['/dev/rdsk/%ss%d' % (disk, s)
-                      for s in (0, 1, 2, 3, 4, 5, 6, 8)]
-            return (['/dev/rdsk/%sp0' % disk] +
-                    [path for path in slices if os.path.exists(path)])
-        if UNAME == 'FreeBSD':
-            return sorted(path for path in glob.glob('/dev/%s*' %
-                                                     glob.escape(disk))
-                          if disk_of(path) == disk)
-
     def clean_disks(self):
         """Labels of exported or destroyed pools make "zpool import" find more
         than the test expects."""
         for disk in test_disks():
-            for path in self.disk_paths(disk):
+            for path in disk_paths(disk):
                 if ok('zdb', '-l', path):
                     self.fix('ZFS label on ' + path,
                              'zpool', 'labelclear', '-f', path)
@@ -1231,10 +1232,14 @@ class Preflight:
             os.remove(TUNABLE_LIST)
 
         # Tunables that save_tunable() saved and an aborted test did not
-        # restore.
-        column = {'FreeBSD': 1, 'Linux': 2}.get(UNAME)
+        # restore.  Only Linux and FreeBSD have save_tunable(): illumos tests
+        # keep the old value in a variable, and an aborted test's change
+        # shows up in the leak check instead.
+        if UNAME == 'SunOS':
+            return
+        column = {'FreeBSD': 1, 'Linux': 2}[UNAME]
         names = {row[0]: row[column] for row in rows(
-            read(STF_SUITE + '/include/tunables.cfg'))} if column else {}
+            read(STF_SUITE + '/include/tunables.cfg'))}
         for path in sorted(glob.glob(glob.escape(BASEDIR) + '/tunable-*')):
             if not os.path.isfile(path):
                 continue
