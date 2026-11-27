@@ -1099,9 +1099,10 @@ def leakcheck(options, statefile, label, start=False, sid=None):
     """
     if not options.leakcheck or options.dryrun:
         return
-    if start and os.path.exists(statefile):
-        os.unlink(statefile)
-    cmd = [SUDO, '-E', options.leakcheck, 'check', statefile, label]
+    if start:
+        cmd = [SUDO, '-E', options.leakcheck, 'record', statefile]
+    else:
+        cmd = [SUDO, '-E', options.leakcheck, 'check', statefile, label]
     if sid:
         cmd += [str(sid), LEAKS_GROUP]
     try:

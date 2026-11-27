@@ -30,17 +30,21 @@ zfs_hygiene preflight [-n]
     (-n: only report it).  Exit 1 if anything is left that would make
     tests fail, or that the run would destroy without owning it.
 
+zfs_hygiene record <statefile>
+    Run by the test runner before a group's setup script and before its
+    first test.  Save the state that a test must leave as it found it in
+    <statefile>, for check to compare with.
+
 zfs_hygiene check [-n] <statefile> <label> [<sid> <groupstatefile>]
-    Run by the test runner before and after every test, setup and
-    cleanup script.  Record the state that a test must leave as it
-    found it and, if <statefile> exists, print one "<label>: ..." line
-    for each difference.  Undo what is safe to undo without knowing the
-    test (tunables, zinject handlers, and pools, datasets, devices,
-    mounts, users and files that the suite owns), so that one leak does
-    not fail the rest of the run.  Save the state in <statefile>.  With
-    <sid>, also report and kill the processes the test left running in
-    its session; <groupstatefile> is the statefile of the test's group.
-    With -n, only report: undo nothing and kill nothing.
+    Run by the test runner after every test, setup and cleanup script.
+    Print one "<label>: ..." line for each difference from the state in
+    <statefile>.  Undo what is safe to undo without knowing the test
+    (tunables, zinject handlers, and pools, datasets, devices, mounts,
+    users and files that the suite owns), so that one leak does not fail
+    the rest of the run.  Save the state in <statefile> for the next
+    check.  With <sid>, also report and kill the processes the test left
+    running in its session; <groupstatefile> is the statefile of the
+    test's group.  With -n, only report: undo nothing and kill nothing.
 
 zfs_hygiene state
     Print the state that check records.
@@ -895,6 +899,14 @@ def is_empty_testdir(change, remove):
         return False
 
 
+def record(statefile):
+    """Save the state that check compares with, before a test or a group
+    starts.  <statefile>.base keeps it for the whole test or group."""
+    now = state()
+    write(statefile + '.base', now)
+    write(statefile, now)
+
+
 def check(statefile, label, sid='', group='', report_only=False):
     if sid:
         check_processes(statefile, label, sid, report_only)
@@ -912,12 +924,16 @@ def check(statefile, label, sid='', group='', report_only=False):
                 re.split('[/@#]', line[len('dataset '):])[0] in held]
         return sorted(set(new), key=os.fsencode)
 
+    if not os.path.isfile(statefile):
+        # There is nothing to compare with: say so, so that a caller that
+        # did not record first finds out.
+        print('%s: no state was recorded before it; recording it now' %
+              label)
+        record(statefile)
+        return
+
     now = state_held()
     base = statefile + '.base'
-    if not os.path.isfile(statefile):
-        write(base, now)
-        write(statefile, now)
-        return
 
     group_base = group + '.base'
     if not os.path.isfile(group_base):
@@ -1303,10 +1319,14 @@ def parse_args(argv):
     preflight = commands.add_parser(
         'preflight', help='clean up before the suite starts')
     preflight.add_argument('-n', action='store_true', help='only report')
+    record = commands.add_parser(
+        'record', help='save the state before a test or group starts')
+    record.add_argument('statefile', help='where to save it')
     check = commands.add_parser(
         'check', help='report and undo what a test left behind')
     check.add_argument('-n', action='store_true', help='only report')
-    check.add_argument('statefile', help='the state that the last check saved')
+    check.add_argument('statefile',
+                       help='the state that record or the last check saved')
     check.add_argument('label', help='what to start each report line with')
     check.add_argument('sid', nargs='?', default='',
                        help='the session the test ran in')
@@ -1342,6 +1362,8 @@ def main(argv):
     status = 0
     if args.command == 'preflight':
         status = Preflight(dryrun=args.n).run()
+    elif args.command == 'record':
+        record(args.statefile)
     elif args.command == 'check':
         check(args.statefile, args.label, args.sid, args.groupstatefile,
               report_only=args.n)

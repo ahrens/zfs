@@ -786,14 +786,28 @@ class CheckTest(HygieneTest):
             hy.check(self.statefile, 'tests/a/b', *args, **kwargs)
         return hy.lines(output.getvalue())
 
-    def test_first_check_saves_the_state(self):
+    def record(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            hy.record(self.statefile)
+        self.assertEqual(output.getvalue(), '')
+
+    def test_record_saves_the_state(self):
+        hy.write(self.statefile, ['pool old'])
+        self.record()
+        self.assertEqual(hy.lines(hy.read(self.statefile)), self.now)
+        self.assertEqual(hy.lines(hy.read(self.statefile + '.base')), self.now)
         self.assertEqual(self.check(), [])
+
+    def test_check_without_a_recorded_state_says_so(self):
+        self.assertEqual(self.check(), [
+            'tests/a/b: no state was recorded before it; recording it now'])
         self.assertEqual(hy.lines(hy.read(self.statefile)), self.now)
         self.assertEqual(hy.lines(hy.read(self.statefile + '.base')), self.now)
         self.assertEqual(self.check(), [])
 
     def test_reports_undoes_and_saves(self):
-        self.check()
+        self.record()
         self.pool('testpool', '/dev/sdb1')
         self.commands['zinject -c 3'] = ''
         self.commands['groupdel zfsgrp'] = (1, '', 'groupdel:  busy\n')
@@ -819,9 +833,9 @@ class CheckTest(HygieneTest):
 
     def test_group_check_does_not_repeat_the_tests_report(self):
         self.statefile, test = self.groupfile, self.statefile
-        self.check()
+        self.record()
         self.statefile, group = test, self.groupfile
-        self.check()
+        self.record()
         self.now += ['share /x']
         self.now.remove('pool rpool')
         self.assertEqual(self.check('123', group), [
@@ -830,7 +844,7 @@ class CheckTest(HygieneTest):
         self.assertEqual(self.check(), [])
 
     def test_reported_leak_that_is_gone_is_reported_again(self):
-        self.check()
+        self.record()
         self.now += ['share /x', 'share /y']
         self.now[self.now.index('tunable zfs/a 1')] = 'tunable zfs/a 2'
         self.patch(set_tunable=mock.Mock(side_effect=hy.Failed('no')))
@@ -854,10 +868,10 @@ class CheckTest(HygieneTest):
 
     def test_removed_by_a_test_only_if_in_the_group_base(self):
         self.statefile = self.groupfile
-        self.check()
+        self.record()
         self.statefile = os.path.join(self.tmp, '.leakcheck-test')
         self.now += ['file made-by-earlier-test']
-        self.check()
+        self.record()
         self.now = ['pool rpool', 'tunable zfs/a 1', 'hostid 2']
         self.assertEqual(self.check('123', self.groupfile), [])
         self.now = ['tunable zfs/a 1', 'hostid 2']
@@ -865,7 +879,7 @@ class CheckTest(HygieneTest):
                          ['tests/a/b: removed pool rpool'])
 
     def test_report_only_undoes_nothing(self):
-        self.check()
+        self.record()
         self.pool('testpool', '/dev/sdb1')
         os.mkdir(self.base + '/testdir5')
         os.mkdir(self.base + '/testdir6')
@@ -883,7 +897,7 @@ class CheckTest(HygieneTest):
                          sorted(self.now, key=os.fsencode))
 
     def test_leaked_processes(self):
-        self.check()
+        self.record()
         hy.write(self.statefile, self.now + ['process zed'])
         self.now += ['process zed']
         self.commands.update({
@@ -907,7 +921,7 @@ class CheckTest(HygieneTest):
 
     def test_suspended_pool_keeps_its_datasets(self):
         self.now += ['pool testpool', 'dataset testpool/fs']
-        self.check()
+        self.record()
         # A test suspends the pool: its datasets can't be listed.
         self.now.remove('dataset testpool/fs')
         self.now.append('suspended testpool')
@@ -923,7 +937,7 @@ class CheckTest(HygieneTest):
             'tests/a/b: leaked dataset testpool/leak (undone)'])
 
     def test_process_gone_after_pgrep(self):
-        self.check()
+        self.record()
         self.commands['pgrep -s 77'] = '13\n'
         self.assertEqual(self.check('77', self.groupfile), [])
         self.assertNotIn('kill -9 13', self.ran)
@@ -931,7 +945,7 @@ class CheckTest(HygieneTest):
                          [])
 
     def test_nested_leaked_mounts_undone_deepest_first(self):
-        self.check()
+        self.record()
         for mnt in ('mnt', 'mnt/sub'):
             self.now.append('mount %s/%s tmpfs tmpfs' % (self.base, mnt))
             self.commands['umount -f %s/%s' % (self.base, mnt)] = ''
@@ -946,7 +960,7 @@ class CheckTest(HygieneTest):
                    other_mounts=lambda: [], state_devices=lambda: [],
                    state_misc=lambda: [])
         self.commands['zinject'] = '  1  rpool  0  0  0  data  0  0\n'
-        self.check()
+        self.record()
         self.commands['zinject'] = '  1  rpool  0  0  0  data  12  3\n'
         self.assertEqual(self.check(), [])
         self.assertNotIn('zinject -c 1', self.ran)
@@ -1210,8 +1224,8 @@ class MainTest(HygieneTest):
     def setUp(self):
         super().setUp()
         self.uid = 0
-        self.patch(check=mock.Mock(), Preflight=mock.Mock(),
-                   state=lambda: ['hostid 1'])
+        self.patch(check=mock.Mock(), record=mock.Mock(),
+                   Preflight=mock.Mock(), state=lambda: ['hostid 1'])
         hy.Preflight.return_value.run.return_value = 1
 
     def test_commands(self):
@@ -1226,14 +1240,18 @@ class MainTest(HygieneTest):
         hy.Preflight.assert_called_with(dryrun=False)
         self.assertEqual(self.main('preflight', '-n'), 1)
         hy.Preflight.assert_called_with(dryrun=True)
+        self.assertEqual(self.main('record', 'file'), 0)
+        hy.record.assert_called_with('file')
         self.assertEqual(self.main('state'), 0)
 
     def test_usage_and_root(self):
         for argv in ((), ('bogus',), ('check', 'file'), ('check', '-n', 'f'),
                      ('check', 'f', 'a', '7', 'g', 'extra'),
-                     ('state', 'extra'), ('preflight', '-x')):
+                     ('state', 'extra'), ('preflight', '-x'), ('record',),
+                     ('record', 'f', 'extra'), ('record', '-n', 'f')):
             self.assertEqual(self.main(*argv), 2)
         hy.check.assert_not_called()
+        hy.record.assert_not_called()
         hy.Preflight.assert_not_called()
         self.uid = 501
         self.assertEqual(self.main('state'), 2)
