@@ -1152,6 +1152,59 @@ class PreflightTest(HygieneTest):
             'zfs_hygiene: cleaned: leftover vdev file file-vdev1)',
             'zfs_hygiene: cleaned: leftover vdev file file-vdev2)'])
 
+    def test_crashed_run_vdev_files(self):
+        big = hy.MIN_VDEV_SIZE
+        files = {'dev_x/disk0': ('testpool1', big),   # cleared
+                 'dev_x/small': ('testpool1', 4096),  # too small
+                 'dev_x/used': ('testpool1', big),    # in an imported pool
+                 'top': ('testpool', big),            # cleared
+                 'mine': ('tank', big),               # not a test pool
+                 'blank': (None, big),                # no label
+                 'mnt/disk0': ('testpool1', big),     # a mount under mnt
+                 'test_results/disk0': ('testpool1', big)}
+        os.makedirs(f'{self.base}/dev_x')
+        os.makedirs(f'{self.base}/mnt/m')
+        os.makedirs(f'{self.base}/test_results')
+        for name, (pool, size) in files.items():
+            path = f'{self.base}/{name}'
+            with open(path, 'w') as f:
+                f.truncate(size)
+            self.commands[f'zdb -l {path}'] = (
+                f"LABEL 0\n    version: 5000\n    name: '{pool}'\n"
+                if pool else (2, '', 'failed to unpack label 0'))
+            self.commands[f'zpool labelclear -f {path}'] = ''
+        os.symlink(f'{self.base}/top', f'{self.base}/link')
+        self.files['/proc/self/mounts'] = (
+            f'tank/fs {self.base}/mnt/m zfs rw 0 0\n')
+        self.commands['zpool list -vHP'] = (
+            f'rpool\t1G\n\t{self.base}/dev_x/used\t1G\n')
+        self.commands['zpool list -H -o name'] = 'rpool\n'
+        self.patch(must=lambda *argv, **kwargs: None)
+        _, output = self.preflight('clean_files')
+        self.assertEqual(output, [
+            f'zfs_hygiene: cleaned: ZFS label of pool testpool1 on '
+            f'{self.base}/dev_x/disk0 (zpool labelclear -f '
+            f'{self.base}/dev_x/disk0)',
+            f'zfs_hygiene: cleaned: ZFS label of pool testpool on '
+            f'{self.base}/top (zpool labelclear -f {self.base}/top)'])
+        # Not even read: too small, used, under a mount or the runner's.
+        for name in ('dev_x/small', 'dev_x/used', 'mnt/disk0',
+                     'test_results/disk0'):
+            self.assertNotIn(f'zdb -l {self.base}/{name}', self.ran)
+
+    def test_crashed_run_path_directory(self):
+        for name in ('constrained_path.AAA', 'constrained_path.BBB',
+                     'constrained_path.CCC'):
+            os.mkdir(f'{self.base}/{name}')
+        self.patch(must=lambda *argv, **kwargs: None)
+        # This run's: STF_PATH or PATHDIR, and PATH.
+        self.patch(RUN_PATH=[f'{self.base}/constrained_path.BBB', '/usr/bin',
+                             f'{self.base}/constrained_path.CCC/'])
+        _, output = self.preflight('clean_files')
+        stale = f'{self.base}/constrained_path.AAA'
+        self.assertEqual(output, [
+            f'zfs_hygiene: cleaned: leftover {stale} (rm -rf {stale})'])
+
     def test_test_zed_left_running(self):
         pattern = f'zed .*-d {self.base}/zed'
         self.commands[f'pgrep -f {pattern}'] = '1432\n'

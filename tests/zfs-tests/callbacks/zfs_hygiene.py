@@ -23,10 +23,11 @@ failing the tests that come after it.
 zfs_hygiene preflight [-n]
     Run once before the suite starts.  Look for state that the suite
     left behind and a clean machine would not have: pools on $DISKS or
-    on test files, ZFS labels on $DISKS, tunables that an aborted test
-    saved and did not restore, zinject handlers, test users and groups,
-    mounts, loop and lofi devices, swap on test devices, scsi_debug and
-    files under $TEST_BASE_DIR.  Clean up what is clearly the suite's own
+    on test files, ZFS labels on $DISKS and test pools' labels on files
+    under $TEST_BASE_DIR, tunables that an aborted test saved and did
+    not restore, zinject handlers, test users and groups, mounts, loop,
+    lofi and md devices, swap on test devices, scsi_debug and files
+    under $TEST_BASE_DIR.  Clean up what is clearly the suite's own
     (-n: only report it).  Exit 1 if anything is left that would make
     tests fail, or that the run would destroy without owning it.
 
@@ -51,7 +52,7 @@ zfs_hygiene state
     Print the state that check records.
 
 Runs as root, on FreeBSD, Linux or illumos.  Reads DISKS, KEEP, STF_SUITE,
-STF_PATH and TEST_BASE_DIR (or FILEDIR) from the environment.
+STF_PATH, PATHDIR, PATH and TEST_BASE_DIR (or FILEDIR) from the environment.
 
 Text from commands and files is decoded as file names are (os.fsdecode),
 so that names with any bytes in them survive a round trip through a
@@ -85,6 +86,10 @@ DISKS = os.environ.get('DISKS', '')
 KEEP = os.environ.get('KEEP', '')
 STF_SUITE = os.environ.get('STF_SUITE', '')
 SUDO_USER = os.environ.get('SUDO_USER', '')
+# The run's own PATH directories: STF_PATH (zfs-tests.sh) or PATHDIR
+# (zfstest), and PATH as it was before main() sets it.
+RUN_PATH = [d for d in [os.environ.get('STF_PATH'), os.environ.get('PATHDIR')]
+            + os.environ.get('PATH', '').split(':') if d]
 
 HYGIENE_DIR = '/var/tmp/zfs_hygiene'
 # Names and sizes of the kernel variables that are tunables (illumos),
@@ -108,6 +113,8 @@ TEST_GROUPS = ('everyone hgroup othergrp pamtestgroup pgroup qgroup qgroup1 '
 NOT_TEST_FILES = re.compile(
     r'err|out|test_results|constrained_path\..*|zts-.*|file-vdev[0-9]+|'
     r'systemd-private-.*|cloud-init.*|zfs_hygiene')
+# The smallest vdev (SPA_MINDEVSIZE): a smaller file has no ZFS label.
+MIN_VDEV_SIZE = 64 << 20
 # zed raises zfs_zevent_len_max when it misses events.
 UNSTABLE_TUNABLES = ('zfs/zfs_dbgmsg_enable', 'zfs/zfs_zevent_len_max')
 # How the tests name the kernel variable they change (illumos).
@@ -290,6 +297,40 @@ def mounted_under(path):
     """Is a file system mounted on or under this path?"""
     return any(mnt == path or mnt.startswith(f'{path}/')
                for _, mnt, _ in mounts())
+
+
+def label_pool(path):
+    """The name of the pool whose ZFS label is on a device or file."""
+    m = re.search(r"^ *name: '(.*)'$", out('zdb', '-l', path), re.M)
+    return m.group(1) if m else None
+
+
+def vdev_sized_files():
+    """Regular files big enough to be vdevs, in $TEST_BASE_DIR and in the
+    directories in it, other than the runner's own."""
+    def listdir(path):
+        try:
+            return [f'{path}/{name}' for name in sorted(os.listdir(path))]
+        except OSError:
+            return []
+    files = []
+    for path in listdir(BASEDIR):
+        if NOT_TEST_FILES.fullmatch(os.path.basename(path)):
+            continue
+        if os.path.isdir(path) and not os.path.islink(path):
+            if not mounted_under(path):
+                files += listdir(path)
+        else:
+            files.append(path)
+    found = []
+    for path in files:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_size >= MIN_VDEV_SIZE:
+            found.append(path)
+    return found
 
 
 def del_account(kind, name):
@@ -1299,6 +1340,22 @@ class Preflight:
         for path in sorted(glob.glob(f'{base}/file-vdev*')):
             if os.path.isfile(path) and path not in used:
                 self.fix(f'leftover vdev file {path}', 'rm', '-f', path)
+        # A run that crashed leaves its tests' vdev files, and the next run's
+        # tests that use the same files find them "part of exported pool".
+        # Clear only a test pool's label: other files may be anyone's.
+        imported = imported_pools()
+        for path in vdev_sized_files():
+            pool = label_pool(path) if path not in used else None
+            if (pool and pool.startswith('testpool') and
+                    pool not in KEEP_POOLS and pool not in imported):
+                self.fix(f'ZFS label of pool {pool} on {path}',
+                         'zpool', 'labelclear', '-f', path)
+        # The run removes its PATH directory when it exits, but not when it
+        # is killed or the system crashes.
+        current = {os.path.realpath(d) for d in RUN_PATH}
+        for path in sorted(glob.glob(f'{base}/constrained_path.*')):
+            if os.path.isdir(path) and os.path.realpath(path) not in current:
+                self.fix(f'leftover {path}', 'rm', '-rf', path)
 
     def run(self):
         # See every pool, also the ones the run will exclude.
