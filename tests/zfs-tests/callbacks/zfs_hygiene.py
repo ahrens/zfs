@@ -938,7 +938,8 @@ def check_processes(statefile, label, sid, report_only):
                 break
             time.sleep(0.5)
         if ok('kill', '-0', pid):
-            print(f"{leak} (undo failed: still running, state {ps(pid, 's')})")
+            state = ps(pid, 'state' if UNAME == 'FreeBSD' else 's')
+            print(f'{leak} (undo failed: still running, state {state})')
         else:
             print(leak + UNDONE)
 

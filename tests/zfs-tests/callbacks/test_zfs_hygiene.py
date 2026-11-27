@@ -935,6 +935,17 @@ class CheckTest(HygieneTest):
             f"tests/a/b: leaked process 12 dd {'x' * 97}"])
         self.assertNotIn('kill -9 11', self.ran)
 
+    def test_stuck_process_state_on_freebsd(self):
+        self.record()
+        self.patch(UNAME='FreeBSD', time=mock.Mock())
+        self.commands.update({
+            'pgrep -s 77': '12\n', 'ps -o comm= -p 12': 'zpool\n',
+            'ps -o args= -p 12': 'zpool destroy -f testpool\n',
+            'kill -0 12': '', 'ps -o state= -p 12': 'D\n'})
+        self.assertEqual(self.check('77', self.groupfile), [
+            'tests/a/b: leaked process 12 zpool destroy -f testpool (undo '
+            'failed: still running, state D)'])
+
     def test_suspended_pool_keeps_its_datasets(self):
         self.now += ['pool testpool', 'dataset testpool/fs']
         self.record()
