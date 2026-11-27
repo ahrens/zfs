@@ -66,6 +66,11 @@ import subprocess
 import sys
 import time
 
+
+#
+# Settings, and the names of what the suite creates.
+#
+
 UNAME = os.uname().sysname
 BASEDIR = (os.environ.get('TEST_BASE_DIR') or os.environ.get('FILEDIR') or
            '/var/tmp')
@@ -119,7 +124,9 @@ class Failed(Exception):
     said, and is empty if the script does not do this cleanup at all."""
 
 
+#
 # Text, files and commands.
+#
 
 def lines(text):
     """Split text at newlines only: a name may hold \\r, \\f and so on."""
@@ -215,7 +222,9 @@ def msg(text):
     print('zfs_hygiene: ' + text)
 
 
+#
 # What the suite owns.
+#
 
 def default_keep():
     """zfs-tests.sh runs the pre-flight before it sets its default KEEP (every
@@ -308,23 +317,6 @@ def test_disks():
     return [disk_of(disk) for disk in DISKS.split()]
 
 
-def is_whole_disk(dev):
-    """Is a DISKS entry a whole disk (or a file, loop or multipath device),
-    not a partition or a device on top of one?"""
-    if dev.startswith('/') and os.path.isfile(dev):
-        return True
-    if UNAME == 'Linux':
-        path = os.path.realpath(dev if dev.startswith('/') else '/dev/' + dev)
-        kind = out('lsblk', '-dno', 'TYPE', path).strip()
-        return kind in ('', 'disk', 'loop', 'mpath')
-    return disk_of(dev) == dev.split('/')[-1]
-
-
-def is_test_disk(dev):
-    disk = disk_of(dev)
-    return bool(disk) and disk in test_disks()
-
-
 def backing_file(dev):
     """The file behind a loop, lofi or md device, if any."""
     if UNAME == 'Linux':
@@ -383,8 +375,9 @@ def is_test_home(user, home):
     return home in [homes + '/' + user for homes in TEST_HOMES]
 
 
-def uses_test_disk(pool):
-    return any(is_test_disk(vdev) for vdev in pool_vdevs(pool))
+def test_zed_pattern():
+    """How pgrep and pkill find a zed that zed_start() started."""
+    return 'zed .*-d %s/zed' % BASEDIR
 
 
 def pool_suspended(pool):
@@ -414,8 +407,10 @@ def destroy_pool(pool):
     must('zpool', 'destroy', '-f', pool, timeout=300)
 
 
+#
 # The state a test must leave as it found it, one "<type> <name> [value]"
 # line per item.
+#
 
 def state_datasets(pools):
     """The datasets, snapshots and bookmarks in the suite's pools that are
@@ -659,7 +654,10 @@ def state():
     return sorted(set('\n'.join(found).split('\n')), key=os.fsencode)
 
 
-# What changed between two states.
+#
+# The leak check: what changed since the last check, which changes
+# to report, and how to undo them.
+#
 
 def key(line):
     """What identifies a state line; the rest of the line is its value."""
@@ -847,11 +845,6 @@ def undo_result(change):
         return ' (undo failed: %s)' % cut(error, 160) if error else ''
 
 
-def test_zed_pattern():
-    """How pgrep and pkill find a zed that zed_start() started."""
-    return 'zed .*-d %s/zed' % BASEDIR
-
-
 def ps(pid, column):
     """A column of ps for one process; nothing if it is gone."""
     return out('ps', '-o', column + '=', '-p', pid).rstrip('\n')
@@ -958,6 +951,31 @@ def check(statefile, label, sid='', group='', report_only=False):
             write(reported, [text], mode='ab')
     # With no changes, nothing was undone or removed: the state is as found.
     write(statefile, state_held() if changes and not report_only else now)
+
+
+#
+# The pre-flight check.
+#
+
+def is_whole_disk(dev):
+    """Is a DISKS entry a whole disk (or a file, loop or multipath device),
+    not a partition or a device on top of one?"""
+    if dev.startswith('/') and os.path.isfile(dev):
+        return True
+    if UNAME == 'Linux':
+        path = os.path.realpath(dev if dev.startswith('/') else '/dev/' + dev)
+        kind = out('lsblk', '-dno', 'TYPE', path).strip()
+        return kind in ('', 'disk', 'loop', 'mpath')
+    return disk_of(dev) == dev.split('/')[-1]
+
+
+def is_test_disk(dev):
+    disk = disk_of(dev)
+    return bool(disk) and disk in test_disks()
+
+
+def uses_test_disk(pool):
+    return any(is_test_disk(vdev) for vdev in pool_vdevs(pool))
 
 
 class Preflight:
@@ -1271,6 +1289,10 @@ class Preflight:
             msg('cleaned up %d item(s) left by an earlier run' % self.cleaned)
         return 0
 
+
+#
+# The command line.
+#
 
 def parse_args(argv):
     """The command and its arguments.  A usage error exits with status 2."""
