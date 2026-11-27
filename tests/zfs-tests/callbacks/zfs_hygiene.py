@@ -50,8 +50,8 @@ zfs_hygiene check [-n] <statefile> <label> [<sid> <groupstatefile>]
 zfs_hygiene state
     Print the state that check records.
 
-Runs as root.  Reads DISKS, KEEP, STF_SUITE, STF_PATH and TEST_BASE_DIR
-(or FILEDIR) from the environment.
+Runs as root, on FreeBSD, Linux or illumos.  Reads DISKS, KEEP, STF_SUITE,
+STF_PATH and TEST_BASE_DIR (or FILEDIR) from the environment.
 
 Text from commands and files is decoded as file names are (os.fsdecode),
 so that names with any bytes in them survive a round trip through a
@@ -283,7 +283,7 @@ def mounts():
                 for line in lines(read('/etc/mnttab'))]
     if UNAME == 'Linux':
         text = read('/proc/self/mounts')
-    else:
+    elif UNAME == 'FreeBSD':
         text = out('mount', '-p')
     return [[unescape(field) for field in row[:3]] for row in rows(text)]
 
@@ -308,7 +308,7 @@ def disk_of(dev):
     name = dev.split('/')[-1]
     if UNAME == 'SunOS':
         return re.sub(r'[sp][0-9]+$', '', name)
-    if UNAME != 'Linux':
+    if UNAME == 'FreeBSD':
         return re.sub(r'[ps][0-9]+[a-h]?$', '', name)
     path = os.path.realpath(dev if dev.startswith('/') else '/dev/' + dev)
     # The disk at the bottom of a partition, dm or md stack.
@@ -328,8 +328,9 @@ def backing_file(dev):
         return out('losetup', '-nO', 'BACK-FILE', dev).rstrip('\n')
     if UNAME == 'SunOS':
         return out('lofiadm', dev).rstrip('\n')
-    info = rows(out('mdconfig', '-lv', '-u', dev.split('/')[-1]))
-    return info[0][3] if info else ''
+    if UNAME == 'FreeBSD':
+        info = rows(out('mdconfig', '-lv', '-u', dev.split('/')[-1]))
+        return info[0][3] if info else ''
 
 
 def is_test_vdev(path):
@@ -496,11 +497,12 @@ def state_tunables():
     if UNAME == 'FreeBSD':
         return ['tunable ' + line.replace('=', ' ', 1)
                 for line in lines(out('sysctl', '-e', 'vfs.zfs'))]
-    formats = {'4': 'X', '8': 'J'}
-    prints = ['%s/%s\n' % (name, formats[size])
-              for name, size in sunos_tunable_list().items()
-              if size in formats]
-    return sunos_tunables(out('mdb', '-k', stdin=''.join(prints)))
+    if UNAME == 'SunOS':
+        formats = {'4': 'X', '8': 'J'}
+        prints = ['%s/%s\n' % (name, formats[size])
+                  for name, size in sunos_tunable_list().items()
+                  if size in formats]
+        return sunos_tunables(out('mdb', '-k', stdin=''.join(prints)))
 
 
 def set_tunable(name, value):
@@ -512,7 +514,7 @@ def set_tunable(name, value):
             raise Failed(str(e))
     elif UNAME == 'FreeBSD':
         must('sysctl', '%s=%s' % (name, value))
-    else:
+    elif UNAME == 'SunOS':
         fmt = {'4': 'W', '8': 'Z'}.get(sunos_tunable_list().get(name))
         if not fmt:
             raise Failed()
@@ -549,7 +551,7 @@ def swap_devices():
         text = read('/proc/swaps')
     elif UNAME == 'SunOS':
         text = out('swap', '-l')
-    else:
+    elif UNAME == 'FreeBSD':
         text = out('swapctl', '-l')
     return [row[0] for row in rows(text, skip=1)]
 
@@ -567,6 +569,12 @@ def lofi_devices():
     return [row[:2] for row in rows(out('lofiadm'), skip=1)]
 
 
+def md_devices():
+    """[device, backing file] for each md device ("-" if it has none)."""
+    return [[row[0], row[3]] for row in rows(out('mdconfig', '-lv'))
+            if len(row) >= 4]
+
+
 def state_devices():
     state = ['swap ' + dev for dev in swap_devices()]
     state += ['dump ' + dev for dev in dump_devices()]
@@ -581,9 +589,8 @@ def state_devices():
         state += ['zvolfile ' + f for f in find('/dev/zvol', stat.S_ISREG)]
     elif UNAME == 'SunOS':
         state += ['lofi %s %s' % tuple(lofi) for lofi in lofi_devices()]
-    else:
-        state += ['md %s %s' % (row[0], row[3])
-                  for row in rows(out('mdconfig', '-lv'))]
+    elif UNAME == 'FreeBSD':
+        state += ['md %s %s' % tuple(md) for md in md_devices()]
     return state
 
 
@@ -634,7 +641,7 @@ def state_arc():
     if UNAME == 'SunOS':
         stats = out('kstat', '-p', 'zfs:0:arcstats:c_max',
                     'zfs:0:arcstats:c_min')
-    else:
+    elif UNAME == 'FreeBSD':
         stats = out('sysctl', 'kstat.zfs.misc.arcstats.c_max',
                     'kstat.zfs.misc.arcstats.c_min')
     return ['arc %s %s' % (re.sub(r'.*[:.]', '', row[0].rstrip(':')), row[1])
@@ -807,9 +814,10 @@ def undo(change):
         # A test zed (zed_start()) left running.
         owned(name == 'zed')
         must('pkill', '-f', test_zed_pattern())
-    elif op in ('leaked loop', 'leaked lofi'):      # <device> <file>
+    elif op in ('leaked loop', 'leaked lofi', 'leaked md'):  # <dev> <file>
         owned(under_basedir(change.rest[len(name) + 1:]))
-        must('losetup' if change.kind == 'loop' else 'lofiadm', '-d', name)
+        must(*{'loop': ['losetup', '-d'], 'lofi': ['lofiadm', '-d'],
+               'md': ['mdconfig', '-d', '-u']}[change.kind], name)
     elif op == 'leaked swap':
         owned(is_test_vdev(name))
         must(*(['swap', '-d'] if UNAME == 'SunOS' else ['swapoff']), name)
@@ -1119,8 +1127,6 @@ class Preflight:
 
     def clean_swap(self):
         """Swap and dump devices on test pools' zvols keep the pools busy."""
-        if UNAME == 'FreeBSD':
-            return
         swapoff = ['swap', '-d'] if UNAME == 'SunOS' else ['swapoff']
         for dev in swap_devices():
             if is_test_vdev(dev):
@@ -1158,7 +1164,7 @@ class Preflight:
                                  'reboot' % (pool, health))
 
     def clean_devices(self):
-        """Loop and lofi devices on test files, and scsi_debug."""
+        """Loop, lofi and md devices on test files, and scsi_debug."""
         if UNAME == 'Linux':
             for loop in loop_devices():
                 dev, _, backing = loop.partition(' ')
@@ -1182,6 +1188,11 @@ class Preflight:
                 if under_basedir(backing):
                     self.fix('lofi device %s on %s' % (dev, backing),
                              'lofiadm', '-d', dev)
+        elif UNAME == 'FreeBSD':
+            for dev, backing in md_devices():
+                if under_basedir(backing):
+                    self.fix('md device %s on %s' % (dev, backing),
+                             'mdconfig', '-d', '-u', dev)
 
     @staticmethod
     def disk_paths(disk):
@@ -1192,9 +1203,10 @@ class Preflight:
                       for s in (0, 1, 2, 3, 4, 5, 6, 8)]
             return (['/dev/rdsk/%sp0' % disk] +
                     [path for path in slices if os.path.exists(path)])
-        return sorted(path for path in glob.glob('/dev/%s*' %
-                                                 glob.escape(disk))
-                      if disk_of(path) == disk)
+        if UNAME == 'FreeBSD':
+            return sorted(path for path in glob.glob('/dev/%s*' %
+                                                     glob.escape(disk))
+                          if disk_of(path) == disk)
 
     def clean_disks(self):
         """Labels of exported or destroyed pools make "zpool import" find more
@@ -1240,7 +1252,7 @@ class Preflight:
             if UNAME == 'Linux':
                 tunable = 'zfs/' + name
                 new = read(PARAMETERS % 'zfs' + '/' + name)
-            else:
+            elif UNAME == 'FreeBSD':
                 tunable = 'vfs.zfs.' + name
                 new = out('sysctl', '-n', tunable)
             old, new = read(path).rstrip('\n'), new.rstrip('\n')
@@ -1350,6 +1362,9 @@ def main(argv):
         args = parse_args(argv)
     except SystemExit as e:
         return e.code
+    if UNAME not in ('FreeBSD', 'Linux', 'SunOS'):
+        sys.stderr.write('zfs_hygiene: %s is not supported\n' % UNAME)
+        return 2
     os.environ['LC_ALL'] = 'C'
     stf_path = os.environ.get('STF_PATH')
     os.environ['PATH'] = ((stf_path + ':' if stf_path else '') +

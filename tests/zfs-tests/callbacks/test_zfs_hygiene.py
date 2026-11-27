@@ -432,6 +432,10 @@ class UndoTest(HygieneTest):
         self.assertFalse(self.undone('leaked', 'loop /dev/loop5'))
         self.assertTrue(self.undone('leaked', 'lofi /dev/lofi/1 ' + vdev))
         self.assertFalse(self.undone('leaked', 'lofi /dev/lofi/2 /export/f'))
+        self.commands['mdconfig -d -u md0'] = ''
+        self.assertTrue(self.undone('leaked', 'md md0 ' + vdev))
+        self.assertFalse(self.undone('leaked', 'md md1 /home/img'))
+        self.assertFalse(self.undone('leaked', 'md md2 -'))
 
     def test_mount_with_a_blank_in_its_name(self):
         mnt = self.base + '/my dir'
@@ -1005,6 +1009,27 @@ class PreflightTest(HygieneTest):
         self.assertEqual((preflight.cleaned, preflight.problems), (0, 1))
         self.assertEqual(self.ran, ['zinject'])
 
+    def test_freebsd_swap_and_md_devices(self):
+        self.patch(UNAME='FreeBSD')
+        vdev = self.base + '/file-vdev1'
+        self.commands['swapctl -l'] = (
+            'Device:       1024-blocks     Used:\n'
+            '/dev/gpt/swapfs   1048576     0\n'
+            '/dev/zvol/testpool/swap 65536 0\n')
+        self.commands['swapoff /dev/zvol/testpool/swap'] = ''
+        self.commands['mdconfig -lv'] = (
+            'md0\tvnode\t 64M\t%s\t-\t\nmd1\tvnode\t 64M\t/home/img\t-\t\n'
+            'md2\tmalloc\t 64M\t-\t-\t\n' % vdev)
+        self.commands['mdconfig -d -u md0'] = ''
+        preflight, output = self.preflight('clean_swap')
+        self.assertEqual(output, [
+            'zfs_hygiene: cleaned: swap on /dev/zvol/testpool/swap '
+            '(swapoff /dev/zvol/testpool/swap)'])
+        preflight, output = self.preflight('clean_devices')
+        self.assertEqual(output, [
+            'zfs_hygiene: cleaned: md device md0 on %s '
+            '(mdconfig -d -u md0)' % vdev])
+
     def test_foreign_pools(self):
         self.pool('rpool', '/dev/sda1')
         self.pool('testpool', '/dev/sdb1')
@@ -1269,6 +1294,11 @@ class MainTest(HygieneTest):
         # Help needs no root.
         self.assertEqual(self.main('-h'), 0)
         self.assertEqual(self.main('check', '-h'), 0)
+
+    def test_unsupported_os(self):
+        self.patch(UNAME='Darwin')
+        self.assertEqual(self.main('state'), 2)
+        self.assertEqual(self.main('-h'), 0)
 
 
 if __name__ == '__main__':
