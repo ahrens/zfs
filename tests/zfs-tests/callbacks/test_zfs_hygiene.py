@@ -1216,9 +1216,12 @@ class MainTest(HygieneTest):
 
     def test_commands(self):
         self.assertEqual(self.main('check', 'file', 'tests/a'), 0)
-        hy.check.assert_called_with('file', 'tests/a', report_only=False)
+        hy.check.assert_called_with('file', 'tests/a', '', '',
+                                    report_only=False)
         self.assertEqual(self.main('check', '-n', 'f', 'a', '7', 'g'), 0)
         hy.check.assert_called_with('f', 'a', '7', 'g', report_only=True)
+        self.assertEqual(self.main('check', 'f', 'a', '7', '-n'), 0)
+        hy.check.assert_called_with('f', 'a', '7', '', report_only=True)
         self.assertEqual(self.main('preflight'), 1)
         hy.Preflight.assert_called_with(dryrun=False)
         self.assertEqual(self.main('preflight', '-n'), 1)
@@ -1227,11 +1230,16 @@ class MainTest(HygieneTest):
 
     def test_usage_and_root(self):
         for argv in ((), ('bogus',), ('check', 'file'), ('check', '-n', 'f'),
-                     ('check', 'f', 'a', '7', 'g', 'extra')):
+                     ('check', 'f', 'a', '7', 'g', 'extra'),
+                     ('state', 'extra'), ('preflight', '-x')):
             self.assertEqual(self.main(*argv), 2)
         hy.check.assert_not_called()
+        hy.Preflight.assert_not_called()
         self.uid = 501
         self.assertEqual(self.main('state'), 2)
+        # Help needs no root.
+        self.assertEqual(self.main('-h'), 0)
+        self.assertEqual(self.main('check', '-h'), 0)
 
 
 if __name__ == '__main__':

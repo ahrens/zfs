@@ -53,6 +53,7 @@ so that names with any bytes in them survive a round trip through a
 statefile and can be printed.
 """
 
+import argparse
 import collections
 import functools
 import glob
@@ -1271,7 +1272,36 @@ class Preflight:
         return 0
 
 
+def parse_args(argv):
+    """The command and its arguments.  A usage error exits with status 2."""
+    parser = argparse.ArgumentParser(
+        prog='zfs_hygiene', description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest='command', metavar='command')
+    preflight = commands.add_parser(
+        'preflight', help='clean up before the suite starts')
+    preflight.add_argument('-n', action='store_true', help='only report')
+    check = commands.add_parser(
+        'check', help='report and undo what a test left behind')
+    check.add_argument('-n', action='store_true', help='only report')
+    check.add_argument('statefile', help='the state that the last check saved')
+    check.add_argument('label', help='what to start each report line with')
+    check.add_argument('sid', nargs='?', default='',
+                       help='the session the test ran in')
+    check.add_argument('groupstatefile', nargs='?', default='',
+                       help="the statefile of the test's group")
+    commands.add_parser('state', help='print the state that check records')
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.error('a command is required')
+    return args
+
+
 def main(argv):
+    try:
+        args = parse_args(argv)
+    except SystemExit as e:
+        return e.code
     os.environ['LC_ALL'] = 'C'
     stf_path = os.environ.get('STF_PATH')
     os.environ['PATH'] = ((stf_path + ':' if stf_path else '') +
@@ -1287,22 +1317,14 @@ def main(argv):
 
     default_keep()
 
-    command, args = (argv + [''])[0], argv[1:]
     status = 0
-    report_only = args[:1] == ['-n']
-    if report_only:
-        args = args[1:]
-    if command == 'preflight':
-        status = Preflight(dryrun=report_only).run()
-    elif command == 'check' and 2 <= len(args) <= 4:
-        check(*args, report_only=report_only)
-    elif command == 'state':
-        print('\n'.join(state()))
+    if args.command == 'preflight':
+        status = Preflight(dryrun=args.n).run()
+    elif args.command == 'check':
+        check(args.statefile, args.label, args.sid, args.groupstatefile,
+              report_only=args.n)
     else:
-        sys.stderr.write(
-            'usage: zfs_hygiene preflight [-n] | state | '
-            'check [-n] <file> <label> [<sid> <groupfile>]\n')
-        status = 2
+        print('\n'.join(state()))
     sys.stdout.flush()
     return status
 
