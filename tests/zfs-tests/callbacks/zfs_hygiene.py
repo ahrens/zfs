@@ -89,9 +89,7 @@ SUDO_USER = os.environ.get('SUDO_USER', '')
 HYGIENE_DIR = '/var/tmp/zfs_hygiene'
 # Names and sizes of the kernel variables that are tunables (illumos),
 # found once per run.
-TUNABLE_LIST = HYGIENE_DIR + '/tunables.list'
-# Where the tunables of a kernel module are (Linux).
-PARAMETERS = '/sys/module/%s/parameters'
+TUNABLE_LIST = f'{HYGIENE_DIR}/tunables.list'
 
 # KEEP is a list of pool names, or an egrep expression of them.
 KEEP_POOLS = set(re.sub(r'[\]\[^$|()]', ' ', KEEP).split())
@@ -168,7 +166,7 @@ def read(path):
 def write(path, content, mode='wb'):
     """Write lines to a file."""
     with open(path, mode) as f:
-        f.write(os.fsencode(''.join(line + '\n' for line in content)))
+        f.write(os.fsencode(''.join(f"{line}\n" for line in content)))
 
 
 def find(top, is_wanted):
@@ -195,7 +193,7 @@ def run(*argv, stdin='', timeout=None):
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
     except OSError as e:
-        return Result(127, '', '%s: %s' % (argv[0], e.strerror))
+        return Result(127, '', f'{argv[0]}: {e.strerror}')
     try:
         out, err = proc.communicate(os.fsencode(stdin), timeout)
     except subprocess.TimeoutExpired:
@@ -224,7 +222,7 @@ def must(*argv, **kwargs):
 
 
 def msg(text):
-    print('zfs_hygiene: ' + text)
+    print(f'zfs_hygiene: {text}')
 
 
 #
@@ -260,7 +258,7 @@ def zvol_pool(path):
 
 
 def under_basedir(path):
-    return path.startswith(BASEDIR + '/')
+    return path.startswith(f'{BASEDIR}/')
 
 
 def unescape(field):
@@ -290,16 +288,16 @@ def mounts():
 
 def mounted_under(path):
     """Is a file system mounted on or under this path?"""
-    return any(mnt == path or mnt.startswith(path + '/')
+    return any(mnt == path or mnt.startswith(f'{path}/')
                for _, mnt, _ in mounts())
 
 
 def del_account(kind, name):
     """Delete a user or a group."""
     if UNAME == 'FreeBSD':
-        must('pw', kind + 'del', name)
+        must('pw', f'{kind}del', name)
     else:
-        must(kind + 'del', name)
+        must(f'{kind}del', name)
 
 
 def disk_of(dev):
@@ -310,7 +308,7 @@ def disk_of(dev):
         return re.sub(r'[sp][0-9]+$', '', name)
     if UNAME == 'FreeBSD':
         return re.sub(r'[ps][0-9]+[a-h]?$', '', name)
-    path = os.path.realpath(dev if dev.startswith('/') else '/dev/' + dev)
+    path = os.path.realpath(dev if dev.startswith('/') else f'/dev/{dev}')
     # The disk at the bottom of a partition, dm or md stack.
     disks = [row[0] for row in rows(out('lsblk', '-snlo', 'NAME,TYPE', path))
              if row[1] == 'disk']
@@ -348,7 +346,7 @@ def is_test_vdev(path):
     if disk and disk in test_disks():
         return True
     if UNAME == 'Linux':
-        model = read('/sys/block/%s/device/model' % disk)
+        model = read(f'/sys/block/{disk}/device/model')
         return model.startswith('scsi_debug')
     return False
 
@@ -356,7 +354,7 @@ def is_test_vdev(path):
 def pool_vdevs(pool):
     """The leaf vdevs of a pool."""
     names = [row[0] for row in rows(out('zpool', 'list', '-vHP', pool))]
-    return [name if name.startswith('/') else '/dev/dsk/' + name
+    return [name if name.startswith('/') else f'/dev/dsk/{name}'
             for name in names if name.startswith('/') or CTD_DISK.match(name)]
 
 
@@ -369,7 +367,7 @@ def is_test_pool(pool):
     for vdev in vdevs:
         if not is_test_vdev(vdev):
             return False
-        if vdev.startswith((BASEDIR + '/testdir', BASEDIR + '/file-vdev')):
+        if vdev.startswith((f'{BASEDIR}/testdir', f'{BASEDIR}/file-vdev')):
             strong = True
         elif vdev.startswith('/dev/') and not is_zvol(vdev):
             strong = True
@@ -378,12 +376,12 @@ def is_test_pool(pool):
 
 def is_test_home(user, home):
     """Is this the home directory that add_user() gives a test user?"""
-    return home in [homes + '/' + user for homes in TEST_HOMES]
+    return home in [f'{homes}/{user}' for homes in TEST_HOMES]
 
 
 def test_zed_pattern():
     """How pgrep and pkill find a zed that zed_start() started."""
-    return 'zed .*-d %s/zed' % BASEDIR
+    return f'zed .*-d {BASEDIR}/zed'
 
 
 def pool_suspended(pool):
@@ -406,10 +404,10 @@ def destroy_pool(pool):
         # zpool clear sleeps in the kernel if the pool suspends again.
         run('zpool', 'clear', pool, timeout=60)
         if pool_suspended(pool):
-            raise Failed('pool %s is suspended' % pool)
+            raise Failed(f'pool {pool} is suspended')
     health = pool_health(pool)
     if health not in ('ONLINE', 'DEGRADED'):
-        raise Failed('pool %s is %s' % (pool, health))
+        raise Failed(f'pool {pool} is {health}')
     must('zpool', 'destroy', '-f', pool, timeout=300)
 
 
@@ -421,11 +419,21 @@ def destroy_pool(pool):
 def state_datasets(pools):
     """The datasets, snapshots and bookmarks in the suite's pools that are
     not suspended."""
-    return ['dataset ' + name
+    return [f'dataset {name}'
             for pool in pools
             for name in lines(out('zfs', 'list', '-H', '-t', 'all', '-o',
                                   'name', '-r', pool))
             if re.search('[/@#]', name)]
+
+
+def parameters(module):
+    """Where Linux has a module's tunables."""
+    return f'/sys/module/{module}/parameters'
+
+
+def choice(value):
+    """The chosen value of "cycle [fastest] original", or the value."""
+    return re.sub(r'.*\[([^]]*)\].*', r'\1', value)
 
 
 def linux_tunable(name, text):
@@ -433,7 +441,7 @@ def linux_tunable(name, text):
     choice like "cycle [fastest] original", keep the choice."""
     if name in UNSTABLE_TUNABLES:
         return []
-    return ['tunable %s %s' % (name, re.sub(r'.*\[([^]]*)\].*', r'\1', value))
+    return [f'tunable {name} {choice(value)}'
             for value in lines(text) if value]
 
 
@@ -446,7 +454,7 @@ def sunos_tunable_sizes(symbols, names):
         if len(field) >= 7 and 'OBJT' in field[2]:
             name = field[6].replace(' ', '')
             if name in names:
-                sizes.append(name + ' ' + re.sub('^0x0*', '', field[1]))
+                sizes.append(f"{name} {re.sub('^0x0*', '', field[1])}")
     return sizes
 
 
@@ -467,7 +475,7 @@ def sunos_tunable_list():
         # The kernel variables the tests change.  kmem_mtb_move is set with
         # mdb -kw by tests on some branches.
         names = {'kmem_mtb_move'}
-        for top in (STF_SUITE + '/tests', STF_SUITE + '/include'):
+        for top in (f'{STF_SUITE}/tests', f'{STF_SUITE}/include'):
             for path in find(top, stat.S_ISREG):
                 names.update(TUNABLE_USE.findall(read(path)))
         symbols = out('mdb', '-k', stdin='::nm\n')
@@ -482,7 +490,7 @@ def sunos_tunable_list():
 def sunos_tunables(mdb_output):
     """The state of the tunables that mdb printed with name/X or name/J."""
     values = [line.split(':') for line in lines(mdb_output)]
-    return ['tunable %s 0x%s' % (v[0], re.sub('[ \t]', '', v[1]))
+    return [f'tunable {v[0]} 0x{"".join(v[1].split())}'
             for v in values if len(v) == 2 and v[1].strip(' ')]
 
 
@@ -490,16 +498,16 @@ def state_tunables():
     if UNAME == 'Linux':
         return [line
                 for module in ('zfs', 'spl')
-                for path in find(PARAMETERS % module, lambda mode:
+                for path in find(parameters(module), lambda mode:
                                  stat.S_ISREG(mode) and mode & stat.S_IWUSR)
                 for line in linux_tunable(
-                    module + '/' + os.path.basename(path), read(path))]
+                    f'{module}/{os.path.basename(path)}', read(path))]
     if UNAME == 'FreeBSD':
-        return ['tunable ' + line.replace('=', ' ', 1)
+        return [f"tunable {line.replace('=', ' ', 1)}"
                 for line in lines(out('sysctl', '-e', 'vfs.zfs'))]
     if UNAME == 'SunOS':
         formats = {'4': 'X', '8': 'J'}
-        prints = ['%s/%s\n' % (name, formats[size])
+        prints = [f'{name}/{formats[size]}\n'
                   for name, size in sunos_tunable_list().items()
                   if size in formats]
         return sunos_tunables(out('mdb', '-k', stdin=''.join(prints)))
@@ -509,16 +517,16 @@ def set_tunable(name, value):
     if UNAME == 'Linux':
         module, _, parameter = name.partition('/')
         try:
-            write(PARAMETERS % module + '/' + parameter, [value])
+            write(f'{parameters(module)}/{parameter}', [value])
         except OSError as e:
             raise Failed(str(e))
     elif UNAME == 'FreeBSD':
-        must('sysctl', '%s=%s' % (name, value))
+        must('sysctl', f'{name}={value}')
     elif UNAME == 'SunOS':
         fmt = {'4': 'W', '8': 'Z'}.get(sunos_tunable_list().get(name))
         if not fmt:
             raise Failed()
-        must('mdb', '-kw', stdin='%s/%s %s\n' % (name, fmt, value))
+        must('mdb', '-kw', stdin=f'{name}/{fmt} {value}\n')
 
 
 def zinject_handlers():
@@ -542,7 +550,7 @@ def loop_devices():
     loops = []
     for line in lines(out('losetup', '-nO', 'NAME,BACK-FILE', '-l')):
         dev, _, backing = line.strip(' ').partition(' ')
-        loops.append(('%s %s' % (dev, backing.strip(' '))).rstrip(' '))
+        loops.append(f"{dev} {backing.strip(' ')}".rstrip(' '))
     return loops
 
 
@@ -576,21 +584,21 @@ def md_devices():
 
 
 def state_devices():
-    state = ['swap ' + dev for dev in swap_devices()]
-    state += ['dump ' + dev for dev in dump_devices()]
+    state = [f'swap {dev}' for dev in swap_devices()]
+    state += [f'dump {dev}' for dev in dump_devices()]
     if UNAME == 'Linux':
-        state += ['loop ' + loop for loop in loop_devices()]
-        state += ['dm ' + row[0] for row in rows(out('dmsetup', 'ls'))
+        state += [f'loop {loop}' for loop in loop_devices()]
+        state += [f'dm {row[0]}' for row in rows(out('dmsetup', 'ls'))
                   if row[0] != 'No']
         if os.path.isdir('/sys/module/scsi_debug'):
             state.append('module scsi_debug')
         # A write to /dev/zvol/... before udev makes the link leaves a
         # regular file there that udev never replaces.
-        state += ['zvolfile ' + f for f in find('/dev/zvol', stat.S_ISREG)]
+        state += [f'zvolfile {f}' for f in find('/dev/zvol', stat.S_ISREG)]
     elif UNAME == 'SunOS':
-        state += ['lofi %s %s' % tuple(lofi) for lofi in lofi_devices()]
+        state += [f'lofi {dev} {backing}' for dev, backing in lofi_devices()]
     elif UNAME == 'FreeBSD':
-        state += ['md %s %s' % tuple(md) for md in md_devices()]
+        state += [f'md {dev} {backing}' for dev, backing in md_devices()]
     return state
 
 
@@ -615,19 +623,20 @@ def test_files():
 
 
 def state_misc():
-    state = ['hostid ' + out('hostid').rstrip('\n')]
-    state += ['user %s %s' % account for account in accounts()]
-    state += ['group ' + group for group in groups()]
+    hostid = out('hostid').rstrip('\n')
+    state = [f'hostid {hostid}']
+    state += [f'user {user} {home}' for user, home in accounts()]
+    state += [f'group {group}' for group in groups()]
     if UNAME == 'SunOS':
-        state += ['share ' + row[1] for row in rows(out('share'))]
+        state += [f'share {row[1]}' for row in rows(out('share'))]
     else:
         exports = (lines(read('/etc/exports.d/zfs.exports')) +
                    lines(read('/etc/zfs/exports')))
-        state += ['share ' + words(line)[0] for line in exports
+        state += [f'share {words(line)[0]}' for line in exports
                   if not line.startswith('#') and words(line)]
     if ok('pgrep', '-x', 'zed'):
         state.append('process zed')
-    return state + ['file ' + name for name in test_files()]
+    return state + [f'file {name}' for name in test_files()]
 
 
 def state_arc():
@@ -635,7 +644,7 @@ def state_arc():
     undo an earlier non-zero value, so the limits can stay changed while the
     tunables read as before."""
     if UNAME == 'Linux':
-        return ['arc %s %s' % (row[0], row[2])
+        return [f'arc {row[0]} {row[2]}'
                 for row in rows(read('/proc/spl/kstat/zfs/arcstats'))
                 if row[0] in ('c_max', 'c_min')]
     if UNAME == 'SunOS':
@@ -644,7 +653,7 @@ def state_arc():
     elif UNAME == 'FreeBSD':
         stats = out('sysctl', 'kstat.zfs.misc.arcstats.c_max',
                     'kstat.zfs.misc.arcstats.c_min')
-    return ['arc %s %s' % (re.sub(r'.*[:.]', '', row[0].rstrip(':')), row[1])
+    return [f"arc {re.sub('.*[:.]', '', row[0].rstrip(':'))} {row[1]}"
             for row in rows(stats)]
 
 
@@ -653,14 +662,14 @@ def state():
     pools = imported_pools()
     test_pools = [pool for pool in pools if is_test_pool(pool)]
     suspended = [pool for pool in test_pools if pool_suspended(pool)]
-    found = (['pool ' + pool for pool in pools] +
-             ['suspended ' + pool for pool in suspended] +
+    found = ([f'pool {pool}' for pool in pools] +
+             [f'suspended {pool}' for pool in suspended] +
              state_datasets([pool for pool in test_pools
                              if pool not in suspended]) +
              state_tunables() + state_arc() +
-             ['zinject %s %s' % tuple((h + [''])[:2])
+             ['zinject ' + ' '.join((h + [''])[:2])
               for h in zinject_handlers()] +
-             ['mount %s %s %s' % tuple(escape(field) for field in mount)
+             ['mount ' + ' '.join(escape(field) for field in mount)
               for mount in other_mounts()] +
              state_devices() + state_misc())
     return sorted(set('\n'.join(found).split('\n')), key=os.fsencode)
@@ -677,7 +686,7 @@ def key(line):
     if field[0] in ('hostid', 'dump'):
         return field[0]
     if field[0] in ('tunable', 'arc'):
-        return '%s %s' % (field[0], field[1])
+        return f'{field[0]} {field[1]}'
     return line
 
 
@@ -698,10 +707,9 @@ class Change:
         self.kind, self.name = (words(line) + ['', ''])[:2]
         # The line without its type: "<name> [value]".
         self.rest = line[len(self.kind) + 1:]
-        self.text = '%s %s' % (what, line)
+        self.text = f'{what} {line}'
         if what == 'changed':
-            self.text = 'changed %s %s -> %s' % (
-                key(line), value(was), value(line))
+            self.text = f'changed {key(line)} {value(was)} -> {value(line)}'
 
 
 def state_diff(old, new):
@@ -760,8 +768,8 @@ def still_true(text, now):
     if what == 'removed':
         return rest not in now
     if what == 'changed':
-        return any(rest.startswith(key(line) + ' ') and
-                   rest.endswith(' -> ' + value(line)) for line in now)
+        return any(rest.startswith(f'{key(line)} ') and
+                   rest.endswith(f' -> {value(line)}') for line in now)
     return True
 
 
@@ -785,7 +793,7 @@ def undo(change):
     """Undo one change, if it is safe without knowing the test: put tunables
     back, and remove what the test added and the suite owns.  Raise Failed
     if it was not undone."""
-    op, name = '%s %s' % (change.what, change.kind), change.name
+    op, name = f'{change.what} {change.kind}', change.name
     if op == 'changed tunable':
         set_tunable(name, value(change.was))
     elif op == 'leaked zinject':     # zinject <id> <pool>
@@ -837,7 +845,7 @@ def undo(change):
     elif op == 'leaked file':
         # Only what the tests (root or a test user) or the runner's user
         # made, and not if something is mounted in it.
-        path = BASEDIR + '/' + change.rest
+        path = f'{BASEDIR}/{change.rest}'
         owned(file_owner(path) in ['root', SUDO_USER] + TEST_USERS)
         owned(not mounted_under(path))
         must('rm', '-rf', path)
@@ -855,12 +863,12 @@ def undo_result(change):
         return UNDONE
     except Failed as e:
         error = ' '.join(str(e).split())
-        return ' (undo failed: %s)' % cut(error, 160) if error else ''
+        return f' (undo failed: {cut(error, 160)})' if error else ''
 
 
 def ps(pid, column):
     """A column of ps for one process; nothing if it is gone."""
-    return out('ps', '-o', column + '=', '-p', pid).rstrip('\n')
+    return out('ps', '-o', f'{column}=', '-p', pid).rstrip('\n')
 
 
 def check_processes(statefile, label, sid, report_only):
@@ -876,7 +884,7 @@ def check_processes(statefile, label, sid, report_only):
         command = ps(pid, 'comm')
         if command in ('zed', 'lt-zed') and zed_was_running:
             continue
-        leak = '%s: leaked process %s %s' % (label, pid, cut(args, 100))
+        leak = f'{label}: leaked process {pid} {cut(args, 100)}'
         if report_only:
             print(leak)
             continue
@@ -887,8 +895,7 @@ def check_processes(statefile, label, sid, report_only):
                 break
             time.sleep(0.5)
         if ok('kill', '-0', pid):
-            print('%s (undo failed: still running, state %s)' % (
-                leak, ps(pid, 's')))
+            print(f"{leak} (undo failed: still running, state {ps(pid, 's')})")
         else:
             print(leak + UNDONE)
 
@@ -898,7 +905,7 @@ def is_empty_testdir(change, remove):
     does no harm.  Remove it, without a report."""
     if not change.text.startswith('leaked file testdir'):
         return False
-    path = BASEDIR + '/' + change.rest
+    path = f'{BASEDIR}/{change.rest}'
     try:
         if remove:
             os.rmdir(path)
@@ -913,11 +920,11 @@ def record(statefile):
     starts.  <statefile>.base keeps it for the whole test or group."""
     # Remove the last group's statefiles first, so that if this record
     # fails, the next check records instead of comparing with them.
-    for path in (statefile, statefile + '.base'):
+    for path in (statefile, f'{statefile}.base'):
         if os.path.lexists(path):
             os.unlink(path)
     now = state()
-    write(statefile + '.base', now)
+    write(f'{statefile}.base', now)
     write(statefile, now)
 
 
@@ -941,15 +948,14 @@ def check(statefile, label, sid='', group='', report_only=False):
     if not os.path.isfile(statefile):
         # There is nothing to compare with: say so, so that a caller that
         # did not record first finds out.
-        print('%s: no state was recorded before it; recording it now' %
-              label)
+        print(f'{label}: no state was recorded before it; recording it now')
         record(statefile)
         return
 
     now = state_held()
-    base = statefile + '.base'
+    base = f'{statefile}.base'
 
-    group_base = group + '.base'
+    group_base = f'{group}.base'
     if not os.path.isfile(group_base):
         group_base = base
     reported = os.path.join(os.path.dirname(statefile), '.leakcheck-reported')
@@ -976,7 +982,7 @@ def check(statefile, label, sid='', group='', report_only=False):
             continue
         text = change.text.strip(' \t')
         result = '' if report_only else undo_result(change)
-        print('%s: %s%s' % (label, text, result))
+        print(f'{label}: {text}{result}')
         if result != UNDONE:
             write(reported, [text], mode='ab')
     # With no changes, nothing was undone or removed: the state is as found.
@@ -993,7 +999,7 @@ def is_whole_disk(dev):
     if dev.startswith('/') and os.path.isfile(dev):
         return True
     if UNAME == 'Linux':
-        path = os.path.realpath(dev if dev.startswith('/') else '/dev/' + dev)
+        path = os.path.realpath(dev if dev.startswith('/') else f'/dev/{dev}')
         kind = out('lsblk', '-dno', 'TYPE', path).strip()
         return kind in ('', 'disk', 'loop', 'mpath')
     return disk_of(dev) == dev.split('/')[-1]
@@ -1011,15 +1017,14 @@ def uses_test_disk(pool):
 def disk_paths(disk):
     """The device paths of a disk and its partitions or slices."""
     if UNAME == 'Linux':
-        return out('lsblk', '-lnpo', 'NAME', '/dev/' + disk).split()
+        return out('lsblk', '-lnpo', 'NAME', f'/dev/{disk}').split()
     if UNAME == 'SunOS':
-        slices = ['/dev/rdsk/%ss%d' % (disk, s)
+        slices = [f'/dev/rdsk/{disk}s{s}'
                   for s in (0, 1, 2, 3, 4, 5, 6, 8)]
-        return (['/dev/rdsk/%sp0' % disk] +
+        return ([f'/dev/rdsk/{disk}p0'] +
                 [path for path in slices if os.path.exists(path)])
     if UNAME == 'FreeBSD':
-        return sorted(path for path in glob.glob('/dev/%s*' %
-                                                 glob.escape(disk))
+        return sorted(path for path in glob.glob(f'/dev/{glob.escape(disk)}*')
                       if disk_of(path) == disk)
 
 
@@ -1037,7 +1042,7 @@ class Preflight:
 
     def problem(self, text):
         """Something is wrong that we leave alone: the run must not start."""
-        msg('PROBLEM: ' + text)
+        msg(f'PROBLEM: {text}')
         self.problems += 1
 
     def fix(self, what, *command, last=True):
@@ -1046,7 +1051,7 @@ class Preflight:
         it is not a problem yet."""
         shown = ' '.join(command)
         if self.dryrun:
-            self.problem('%s (would run: %s)' % (what, shown))
+            self.problem(f'{what} (would run: {shown})')
             return True
         try:
             if command[0] in self.actions:
@@ -1055,9 +1060,9 @@ class Preflight:
                 must(*command)
         except Failed:
             if last:
-                self.problem('%s (failed: %s)' % (what, shown))
+                self.problem(f'{what} (failed: {shown})')
             return False
-        msg('cleaned: %s (%s)' % (what, shown))
+        msg(f'cleaned: {what} ({shown})')
         self.cleaned += 1
         return True
 
@@ -1065,26 +1070,25 @@ class Preflight:
         runner = (r'^[^ ]*python[0-9.]* [^ ]*'
                   r'(test-runner\.py|/bin/run)( |$)')
         if ok('pgrep', '-f', runner):
-            self.problem('another test runner is running: ' + ''.join(
-                lines(out('pgrep', '-fl', runner))[:1]))
+            running = ''.join(lines(out('pgrep', '-fl', runner))[:1])
+            self.problem(f'another test runner is running: {running}')
         disks = test_disks()
         dups = sorted({disk for disk in disks if disks.count(disk) > 1})
         if dups:
-            self.problem('DISKS lists %s more than once' % ' '.join(dups))
+            self.problem(f"DISKS lists {' '.join(dups)} more than once")
         # The suite takes the whole disk of each entry as its own.
         for dev in DISKS.split():
             if not is_whole_disk(dev):
-                self.problem('DISKS includes %s, which is not a whole disk; '
-                             'the suite would take all of %s' % (
-                                 dev, disk_of(dev)))
+                self.problem(f'DISKS includes {dev}, which is not a whole '
+                             'disk; the suite would take all of '
+                             f'{disk_of(dev)}')
         if SUDO_USER in TEST_USERS:
-            self.problem('the tests create and delete user %s; run the '
-                         'suite as another user' % SUDO_USER)
+            self.problem(f'the tests create and delete user {SUDO_USER}; '
+                         'run the suite as another user')
         df = words((lines(out('df', '-k', BASEDIR)) or [''])[-1])
         avail = df[-3] if len(df) > 2 else ''
         if re.match('[0-9]+$', avail) and int(avail) < 2 * 1024 * 1024:
-            self.problem('only %d MB free in %s' % (
-                int(avail) // 1024, BASEDIR))
+            self.problem(f'only {int(avail) // 1024} MB free in {BASEDIR}')
 
         # A disk in $DISKS that holds a file system mounted outside the test
         # directory, swap or dump is not the suite's: DISKS is wrong, e.g.
@@ -1092,38 +1096,38 @@ class Preflight:
         for dev, mnt, fstype in mounts():
             if (dev.startswith('/dev/') and fstype != 'zfs' and
                     not under_basedir(mnt) and is_test_disk(dev)):
-                self.problem('DISKS includes %s, which has %s mounted; '
-                             'check DISKS' % (disk_of(dev), mnt))
+                self.problem(f'DISKS includes {disk_of(dev)}, which has '
+                             f'{mnt} mounted; check DISKS')
         if UNAME != 'FreeBSD':
             for dev in swap_devices() + dump_devices():
                 if not is_zvol(dev) and is_test_disk(dev):
-                    self.problem('DISKS includes %s, which holds swap or '
-                                 'dump; check DISKS' % disk_of(dev))
+                    self.problem(f'DISKS includes {disk_of(dev)}, which '
+                                 'holds swap or dump; check DISKS')
 
     def check_foreign_pools(self):
         """Imported pools that are not the suite's but are in its way."""
         for pool in imported_pools():
             if pool in KEEP_POOLS:
                 if uses_test_disk(pool):
-                    self.problem('kept pool %s uses DISKS' % pool)
+                    self.problem(f'kept pool {pool} uses DISKS')
             elif is_test_pool(pool):
                 pass
             elif pool.startswith('testpool') or uses_test_disk(pool):
                 self.problem(' '.join(
-                    ['pool %s uses devices outside DISKS and the test '
-                     'directory:' % pool] + pool_vdevs(pool)))
+                    [f'pool {pool} uses devices outside DISKS and the test '
+                     'directory:'] + pool_vdevs(pool)))
             elif UNAME == 'SunOS':
                 # default_cleanup destroys every pool not in KEEP.
-                self.problem('pool %s is not in KEEP; the suite would '
-                             'destroy it' % pool)
+                self.problem(f'pool {pool} is not in KEEP; the suite would '
+                             'destroy it')
 
     def clean_zinject(self):
         for handler in zinject_handlers():
             ident, pool = (handler + [''])[:2]
             if pool in KEEP_POOLS:
-                msg('note: zinject handler %s on kept pool %s' % (ident, pool))
+                msg(f'note: zinject handler {ident} on kept pool {pool}')
             else:
-                self.fix('zinject handler %s on %s' % (ident, pool),
+                self.fix(f'zinject handler {ident} on {pool}',
                          'zinject', '-c', ident)
 
     def clean_mounts(self):
@@ -1131,7 +1135,7 @@ class Preflight:
         for mnt, fstype, dev in sorted(other_mounts(), reverse=True,
                                        key=lambda m: m[0].count('/')):
             if under_basedir(mnt) or is_test_vdev(dev):
-                self.fix('%s mount of %s on %s' % (fstype, dev, mnt),
+                self.fix(f'{fstype} mount of {dev} on {mnt}',
                          'umount', '-f', mnt)
 
     def clean_swap(self):
@@ -1139,7 +1143,7 @@ class Preflight:
         swapoff = ['swap', '-d'] if UNAME == 'SunOS' else ['swapoff']
         for dev in swap_devices():
             if is_test_vdev(dev):
-                self.fix('swap on ' + dev, *(swapoff + [dev]))
+                self.fix(f'swap on {dev}', *(swapoff + [dev]))
         for dev in dump_devices():
             if not is_test_vdev(dev):
                 continue
@@ -1147,10 +1151,9 @@ class Preflight:
             kept = [path for path in sorted(glob.glob('/dev/zvol/dsk/*/dump'))
                     if zvol_pool(path) in KEEP_POOLS]
             if kept:
-                self.fix('dump device on ' + dev, 'dumpadm', '-d', kept[0])
+                self.fix(f'dump device on {dev}', 'dumpadm', '-d', kept[0])
             else:
-                self.problem('dump device is %s; move it with dumpadm -d' %
-                             dev)
+                self.problem(f'dump device is {dev}; move it with dumpadm -d')
 
     def clean_pools(self):
         """Destroy the pools the suite created and left behind; more than one
@@ -1165,12 +1168,12 @@ class Preflight:
                 if pool_suspended(pool):
                     health = 'SUSPENDED'
                 if health in ('ONLINE', 'DEGRADED'):
-                    if self.fix('destroy leftover pool ' + pool,
+                    if self.fix(f'destroy leftover pool {pool}',
                                 'destroy_pool', pool, last=last):
                         done.add(pool)
                 elif last:
-                    self.problem('leftover pool %s is %s; clear it or '
-                                 'reboot' % (pool, health))
+                    self.problem(f'leftover pool {pool} is {health}; clear '
+                                 'it or reboot')
 
     def clean_devices(self):
         """Loop, lofi and md devices on test files, and scsi_debug."""
@@ -1181,26 +1184,26 @@ class Preflight:
                     continue
                 for dm in [row[0] for row in rows(out('dmsetup', 'ls'))]:
                     deps = out('dmsetup', 'deps', '-o', 'devname', dm)
-                    if '(%s)' % dev.split('/')[-1] in deps:
-                        self.fix('dm device %s on %s' % (dm, dev),
+                    if f"({dev.split('/')[-1]})" in deps:
+                        self.fix(f'dm device {dm} on {dev}',
                                  'dmsetup', 'remove', dm)
-                self.fix('loop device %s on %s' % (dev, backing),
+                self.fix(f'loop device {dev} on {backing}',
                          'losetup', '-d', dev)
             if os.path.isdir('/sys/module/scsi_debug'):
                 self.fix('scsi_debug module loaded',
                          'modprobe', '-r', 'scsi_debug')
             for path in find('/dev/zvol', stat.S_ISREG):
-                self.fix('regular file %s in /dev/zvol' % path,
+                self.fix(f'regular file {path} in /dev/zvol',
                          'rm', '-f', path)
         elif UNAME == 'SunOS':
             for dev, backing in lofi_devices():
                 if under_basedir(backing):
-                    self.fix('lofi device %s on %s' % (dev, backing),
+                    self.fix(f'lofi device {dev} on {backing}',
                              'lofiadm', '-d', dev)
         elif UNAME == 'FreeBSD':
             for dev, backing in md_devices():
                 if under_basedir(backing):
-                    self.fix('md device %s on %s' % (dev, backing),
+                    self.fix(f'md device {dev} on {backing}',
                              'mdconfig', '-d', '-u', dev)
 
     def clean_disks(self):
@@ -1209,7 +1212,7 @@ class Preflight:
         for disk in test_disks():
             for path in disk_paths(disk):
                 if ok('zdb', '-l', path):
-                    self.fix('ZFS label on ' + path,
+                    self.fix(f'ZFS label on {path}',
                              'zpool', 'labelclear', '-f', path)
 
     def check_cachefile(self):
@@ -1222,8 +1225,8 @@ class Preflight:
         for line in lines(out('zdb', '-C', '-U', cache)):
             pool = line[:-1].strip()
             if re.match('[^ \t].*:$', line) and pool not in imported:
-                msg('note: pool %s is in %s but not imported; the next boot '
-                    'will try to import it' % (pool, cache))
+                msg(f'note: pool {pool} is in {cache} but not imported; the '
+                    'next boot will try to import it')
 
     def clean_tunables(self):
         # Find the tunables again: the kernel may have changed since the
@@ -1239,38 +1242,38 @@ class Preflight:
             return
         column = {'FreeBSD': 1, 'Linux': 2}[UNAME]
         names = {row[0]: row[column] for row in rows(
-            read(STF_SUITE + '/include/tunables.cfg'))}
-        for path in sorted(glob.glob(glob.escape(BASEDIR) + '/tunable-*')):
+            read(f'{STF_SUITE}/include/tunables.cfg'))}
+        for path in sorted(glob.glob(f'{glob.escape(BASEDIR)}/tunable-*')):
             if not os.path.isfile(path):
                 continue
             name = names.get(path.split('/tunable-')[-1], '')
             if name in ('', 'UNSUPPORTED'):
-                self.problem('%s saves a tunable that this script cannot '
-                             'restore; restore it and remove the file' % path)
+                self.problem(f'{path} saves a tunable that this script '
+                             'cannot restore; restore it and remove the file')
                 continue
             if UNAME == 'Linux':
-                tunable = 'zfs/' + name
-                new = read(PARAMETERS % 'zfs' + '/' + name)
+                tunable = f'zfs/{name}'
+                new = read(f"{parameters('zfs')}/{name}")
             elif UNAME == 'FreeBSD':
-                tunable = 'vfs.zfs.' + name
+                tunable = f'vfs.zfs.{name}'
                 new = out('sysctl', '-n', tunable)
             old, new = read(path).rstrip('\n'), new.rstrip('\n')
             if new != old and not self.fix(
-                    'tunable %s is %s, saved %s' % (tunable, new, old),
+                    f'tunable {tunable} is {new}, saved {old}',
                     'set_tunable', tunable, old):
                 continue        # Keep what it should be.
-            self.fix('saved tunable file ' + path, 'rm', '-f', path)
+            self.fix(f'saved tunable file {path}', 'rm', '-f', path)
 
     def clean_users(self):
         for user, home in accounts():
             if user != SUDO_USER and is_test_home(user, home):
-                self.fix('test user ' + user, 'del_account', 'user', user)
+                self.fix(f'test user {user}', 'del_account', 'user', user)
                 if os.path.isdir(home):
-                    self.fix('home of test user ' + user, 'rm', '-rf', home)
+                    self.fix(f'home of test user {user}', 'rm', '-rf', home)
         existing = groups()
         for group in TEST_GROUPS:
             if group in existing:
-                self.fix('test group ' + group, 'del_account', 'group', group)
+                self.fix(f'test group {group}', 'del_account', 'group', group)
 
     def clean_files(self):
         base = glob.escape(BASEDIR)
@@ -1278,22 +1281,22 @@ class Preflight:
         if ok('pgrep', '-f', test_zed_pattern()):
             self.fix('test zed', 'pkill', '-f', test_zed_pattern())
         for pattern in ('testdir*', 'tempfile*', 'zed', 'zts-results.*'):
-            for path in sorted(glob.glob(base + '/' + pattern)):
+            for path in sorted(glob.glob(f'{base}/{pattern}')):
                 if not os.path.exists(path):
                     continue
                 if mounted_under(path):
-                    self.problem('leftover %s has a file system mounted in '
-                                 'it' % path)
+                    self.problem(f'leftover {path} has a file system '
+                                 'mounted in it')
                 else:
-                    self.fix('leftover ' + path, 'rm', '-rf', path)
+                    self.fix(f'leftover {path}', 'rm', '-rf', path)
         # zfs-tests.sh refuses to start if its vdev files exist; remove them
         # unless a pool or a loop device still uses them.
         used = {row[0] for row in rows(out('zpool', 'list', '-vHP'))}
         for device in state_devices():
             used.update(words(device))
-        for path in sorted(glob.glob(base + '/file-vdev*')):
+        for path in sorted(glob.glob(f'{base}/file-vdev*')):
             if os.path.isfile(path) and path not in used:
-                self.fix('leftover vdev file ' + path, 'rm', '-f', path)
+                self.fix(f'leftover vdev file {path}', 'rm', '-f', path)
 
     def run(self):
         # See every pool, also the ones the run will exclude.
@@ -1305,8 +1308,8 @@ class Preflight:
         self.check_env()
         self.check_foreign_pools()
         if self.problems:
-            msg('%d problem(s); fix them before running the ZFS test suite' %
-                self.problems)
+            msg(f'{self.problems} problem(s); fix them before running the ZFS '
+                'test suite')
             return 1
         for step in (self.clean_zinject, self.clean_mounts, self.clean_swap,
                      self.clean_pools, self.clean_devices, self.clean_disks,
@@ -1315,11 +1318,11 @@ class Preflight:
             step()
 
         if self.problems:
-            msg('%d problem(s) left; fix them before running the ZFS test '
-                'suite' % self.problems)
+            msg(f'{self.problems} problem(s) left; fix them before running '
+                'the ZFS test suite')
             return 1
         if self.cleaned:
-            msg('cleaned up %d item(s) left by an earlier run' % self.cleaned)
+            msg(f'cleaned up {self.cleaned} item(s) left by an earlier run')
         return 0
 
 
@@ -1362,7 +1365,7 @@ def main(argv):
     except SystemExit as e:
         return e.code
     if UNAME not in ('FreeBSD', 'Linux', 'SunOS'):
-        sys.stderr.write('zfs_hygiene: %s is not supported\n' % UNAME)
+        sys.stderr.write(f'zfs_hygiene: {UNAME} is not supported\n')
         return 2
     os.environ['LC_ALL'] = 'C'
     stf_path = os.environ.get('STF_PATH')
