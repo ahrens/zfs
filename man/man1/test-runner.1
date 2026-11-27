@@ -235,7 +235,7 @@ Before each group's setup script and before its first test, it is called as
 which saves the state in
 .Ar statefile .
 After each test, it is called as
-.Ar script Cm check Ar statefile label sid groupstatefile ,
+.Ar script Cm check Ar statefile label Op Ar sid groupstatefile ,
 and after the group's cleanup script as
 .Ar script Cm check Ar statefile label .
 It prints one line for each change since
@@ -253,6 +253,7 @@ file in the output directory, and counts the leaking scripts in the summary.
 is the session ID the test ran in, to find the processes it left running, and
 .Ar groupstatefile
 is the statefile of the test's group.
+Both are left out for a test that did not run.
 .It Fl l Ar logfile
 Limit the supplied test selection to tests recorded as
 .Sy FAIL

@@ -799,6 +799,17 @@ class CheckTest(HygieneTest):
         self.assertEqual(hy.lines(hy.read(self.statefile + '.base')), self.now)
         self.assertEqual(self.check(), [])
 
+    def test_failed_record_leaves_no_old_state(self):
+        hy.write(self.statefile, ['pool old'])
+        hy.write(self.statefile + '.base', ['pool old'])
+
+        def fail():
+            raise OSError('state failed')
+        self.patch(state=fail)
+        self.assertRaises(OSError, self.record)
+        self.assertFalse(os.path.lexists(self.statefile))
+        self.assertFalse(os.path.lexists(self.statefile + '.base'))
+
     def test_check_without_a_recorded_state_says_so(self):
         self.assertEqual(self.check(), [
             'tests/a/b: no state was recorded before it; recording it now'])

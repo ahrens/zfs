@@ -36,7 +36,8 @@ zfs_hygiene record <statefile>
     <statefile>, for check to compare with.
 
 zfs_hygiene check [-n] <statefile> <label> [<sid> <groupstatefile>]
-    Run by the test runner after every test, setup and cleanup script.
+    Run by the test runner after every test and after a group's cleanup
+    script.
     Print one "<label>: ..." line for each difference from the state in
     <statefile>.  Undo what is safe to undo without knowing the test
     (tunables, zinject handlers, and pools, datasets, devices, mounts,
@@ -902,6 +903,11 @@ def is_empty_testdir(change, remove):
 def record(statefile):
     """Save the state that check compares with, before a test or a group
     starts.  <statefile>.base keeps it for the whole test or group."""
+    # Remove the last group's statefiles first, so that if this record
+    # fails, the next check records instead of comparing with them.
+    for path in (statefile, statefile + '.base'):
+        if os.path.lexists(path):
+            os.unlink(path)
     now = state()
     write(statefile + '.base', now)
     write(statefile, now)
