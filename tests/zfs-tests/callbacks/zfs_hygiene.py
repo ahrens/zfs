@@ -973,14 +973,25 @@ def ps(pid, column):
     return out('ps', '-o', f'{column}=', '-p', pid).rstrip('\n')
 
 
+def process_state(pid):
+    """The state of a process, as ps prints it: D, R, S, Z and so on."""
+    return ps(pid, 'state' if UNAME == 'FreeBSD' else 's')
+
+
 def check_processes(statefile, label, sid, report_only):
     """Report and kill the processes a test left running, e.g. background
     jobs.  The runner starts each test in a session of its own."""
     zed_was_running = 'process zed' in lines(read(statefile))
     for pid in out('pgrep', '-s', sid).split():
+        # Skip one that exited since pgrep, and a zombie: it holds nothing,
+        # and init reaps it, e.g. a subshell that the test's shell left when
+        # it exited.
+        state = process_state(pid)
+        if not state or state.startswith('Z'):
+            continue
         args = ps(pid, 'args')
         if not args:
-            continue        # It exited since pgrep.
+            continue
         # A test may restart the zed that was running before it (zed_stop,
         # then zed_start).
         command = ps(pid, 'comm')
@@ -997,8 +1008,8 @@ def check_processes(statefile, label, sid, report_only):
                 break
             time.sleep(0.5)
         if ok('kill', '-0', pid):
-            state = ps(pid, 'state' if UNAME == 'FreeBSD' else 's')
-            print(f'{leak} (undo failed: still running, state {state})')
+            print(f'{leak} (undo failed: still running, state '
+                  f'{process_state(pid)})')
         else:
             print(leak + UNDONE)
 

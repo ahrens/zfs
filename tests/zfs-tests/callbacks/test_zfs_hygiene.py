@@ -986,6 +986,7 @@ class CheckTest(HygieneTest):
             'ps -o comm= -p 11': 'sleep\n', 'ps -o comm= -p 12': 'dd\n',
             'ps -o args= -p 11': 'sleep 1000\n',
             'ps -o args= -p 12': f"dd {'x' * 200}\n",
+            'ps -o s= -p 10': 'S\n', 'ps -o s= -p 11': 'S\n',
             'kill -0 12': '', 'ps -o s= -p 12': 'D\n'})
         self.patch(time=mock.Mock())
         self.assertEqual(self.check('77', self.groupfile), [
@@ -1035,6 +1036,22 @@ class CheckTest(HygieneTest):
         self.assertNotIn('kill -9 13', self.ran)
         self.assertEqual(self.check('77', self.groupfile, report_only=True),
                          [])
+
+    def test_zombie_is_not_a_leak(self):
+        self.record()
+        self.patch(time=mock.Mock())
+        self.commands.update({
+            'pgrep -s 77': '14\n', 'ps -o args= -p 14': '[tst.timeout.ksh]\n',
+            'ps -o s= -p 14': 'Z\n', 'ps -o comm= -p 14': 'tst.timeout.ksh\n'})
+        self.assertEqual(self.check('77', self.groupfile), [])
+        self.assertNotIn('kill -9 14', self.ran)
+        # Reaped between pgrep and ps.
+        del self.commands['ps -o s= -p 14']
+        self.assertEqual(self.check('77', self.groupfile), [])
+        self.patch(UNAME='FreeBSD')
+        self.commands['ps -o state= -p 14'] = 'Z\n'
+        self.assertEqual(self.check('77', self.groupfile), [])
+        self.assertNotIn('kill -9 14', self.ran)
 
     def test_files_of_other_programs_are_reported_and_left(self):
         self.record()
