@@ -914,7 +914,8 @@ mktemp_file() {
 }
 mkdir -p "$FILEDIR" || :
 RESULTS_FILE=$(mktemp_file zts-results)
-[ "$HYGIENE" != "no" ] && HYGIENE_ARGS="-L $HYGIENE_SCRIPT"
+HYGIENE_LEAKS=""
+[ "$HYGIENE" != "no" ] && HYGIENE_LEAKS="$HYGIENE_SCRIPT"
 
 REPORT_FILE=$(mktemp_file zts-report)
 
@@ -923,7 +924,7 @@ REPORT_FILE=$(mktemp_file zts-report)
 #
 msg "${TEST_RUNNER}" \
     "${QUIET:+-q}" \
-    "${HYGIENE_ARGS}" \
+    "${HYGIENE_LEAKS:+-L $HYGIENE_LEAKS}" \
     "${DEBUG:+-D}" \
     "${KMEMLEAK:+-m}" \
     "${KMSG:+-K}" \
@@ -935,7 +936,7 @@ msg "${TEST_RUNNER}" \
 { PATH=$STF_PATH \
     ${TEST_RUNNER} \
     ${QUIET:+-q} \
-    ${HYGIENE_ARGS} \
+    ${HYGIENE_LEAKS:+-L "$HYGIENE_LEAKS"} \
     ${DEBUG:+-D} \
     ${KMEMLEAK:+-m} \
     ${KMSG:+-K} \
@@ -966,7 +967,7 @@ if [ "$RESULT" -eq "2" ] && [ -n "$RERUN" ]; then
 	{ PATH=$STF_PATH \
 	    ${TEST_RUNNER} \
 	        ${QUIET:+-q} \
-	        ${HYGIENE_ARGS} \
+	        ${HYGIENE_LEAKS:+-L "$HYGIENE_LEAKS"} \
 	        ${DEBUG:+-D} \
 	        ${KMEMLEAK:+-m} \
 	    -c "${RUNFILES}" \
