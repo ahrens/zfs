@@ -514,34 +514,99 @@ class UndoTest(HygieneTest):
         self.assertFalse(self.undone('leaked', 'group wheel2'))
         self.assertEqual(self.ran, [])
 
-    def test_files_made_by_the_tests(self):
-        path = f'{self.base}/a  b *'
-        self.commands[f'rm -rf {path}'] = ''
-        self.files['/proc/self/mounts'] = '/dev/sda1 / ext4 rw 0 0\n'
-        for owner, expected in (('root', True), ('tester', True),
-                                ('zfstest', True), ('alice', False)):
-            self.patch(file_owner=lambda path, owner=owner: owner)
-            self.assertEqual(self.undone('leaked', 'file a  b *'), expected)
-            self.assertEqual(self.ran,
-                             [f'rm -rf {path}'] * expected)
-
-    def test_file_with_a_mount_in_it_is_left(self):
+    def test_saved_tunable_file_is_removed(self):
+        os.mkdir(f'{self.base}/tunable-DIR')
+        for name in ('tunable-ARC_MAX', 'tunable-arc_c_max', 'tunable-x;y'):
+            open(f'{self.base}/{name}', 'w').close()
+            self.commands[f'rm -f {self.base}/{name}'] = ''
+        os.symlink(f'{self.base}/tunable-ARC_MAX', f'{self.base}/tunable-LN')
         self.patch(file_owner=lambda path: 'root')
-        self.commands[f'rm -rf {self.base}/dir'] = ''
+        self.assertTrue(self.undone('leaked', 'file tunable-ARC_MAX'))
+        self.assertEqual(self.ran, [f'rm -f {self.base}/tunable-ARC_MAX'])
+        # Not save_tunable()'s: save_arc_limits() keeps the ARC's own
+        # limits in tunable-arc_c_max and tunable-arc_c_min.
+        for name in ('tunable-DIR', 'tunable-LN', 'tunable-x;y',
+                     'tunable-arc_c_max'):
+            self.assertFalse(self.undone('leaked', f'file {name}'))
+            self.assertEqual(self.ran, [])
+        self.patch(file_owner=lambda path: 'tester')
+        self.assertFalse(self.undone('leaked', 'file tunable-ARC_MAX'))
+        self.assertEqual(self.ran, [])
+
+    def test_other_files_are_left(self):
+        # Files that a build and a package install running beside the
+        # tests made, owned by root or the runner's user.
+        os.makedirs(f'{self.base}/dracut.pxL51V/initramfs/usr/lib')
+        for name in ('builtin-exitcode.txt', 'rpm-tmp.1hDqOa',
+                     'tmp.mMquQ22pT3', 'dracut.pxL51V/initramfs/usr/lib/f'):
+            open(f'{self.base}/{name}', 'w').close()
+        for owner in ('root', 'tester'):
+            self.patch(file_owner=lambda path, owner=owner: owner)
+            for name in ('builtin-exitcode.txt', 'rpm-tmp.1hDqOa',
+                         'tmp.mMquQ22pT3', 'dracut.pxL51V'):
+                self.assertFalse(self.undone('leaked', f'file {name}'))
+                self.assertEqual(self.ran, [])
+                self.assertTrue(os.path.exists(f'{self.base}/{name}'))
+        self.assertEqual(
+            hy.undo_result(self.change('leaked', 'file dracut.pxL51V')), '')
+
+    def test_mount_point_left_by_a_test_is_removed(self):
+        os.makedirs(f'{self.base}/testdir/vdevs')
+        os.makedirs(f'{self.base}/testdir12/x')
+        os.makedirs(f'{self.base}/testdir.bak/x')
+        for name in ('testdir', 'testdir12', 'testdir.bak', 'my dir'):
+            self.commands[f'rm -rf {self.base}/{name}'] = ''
         self.files['/proc/self/mounts'] = (
-            f'tank/fs {self.base}/dir/mnt zfs rw 0 0\n')
-        self.assertFalse(self.undone('leaked', 'file dir'))
-        self.files['/proc/self/mounts'] = (
-            f'tank/fs {self.base}/my\\040dir/mnt zfs rw 0 0\n')
-        self.assertFalse(self.undone('leaked', 'file my dir'))
+            f'tank/fs {self.base}/testdir12/x zfs rw 0 0\n')
+        self.assertTrue(self.undone('leaked', 'file testdir'))
+        self.assertEqual(self.ran, [f'rm -rf {self.base}/testdir'])
+        for name in ('testdir12', 'testdir.bak'):
+            self.assertFalse(self.undone('leaked', f'file {name}'))
+            self.assertNotIn(f'rm -rf {self.base}/{name}', self.ran)
+
+    def test_mounts_on_illumos(self):
         self.patch(UNAME='SunOS')
         self.files['/etc/mnttab'] = (
             f'tank/fs\t{self.base}/my dir/mnt\tzfs\trw\t0\n')
-        self.assertFalse(self.undone('leaked', 'file my dir'))
-        self.patch(UNAME='Linux')
-        self.files['/proc/self/mounts'] = (
-            f'tank/fs {self.base}/directory zfs rw 0 0\n')
-        self.assertTrue(self.undone('leaked', 'file dir'))
+        self.assertTrue(hy.mounted_under(f'{self.base}/my dir'))
+        self.assertFalse(hy.mounted_under(f'{self.base}/my'))
+        self.assertEqual(hy.mounts(), [['tank/fs', f'{self.base}/my dir/mnt',
+                                        'zfs']])
+
+    def test_test_pool_label_on_a_leaked_file_is_cleared(self):
+        big = hy.MIN_VDEV_SIZE
+        files = {'vdev1': ('testpool', big),          # cleared
+                 'dev_x/disk0': ('testpool1', big),   # cleared
+                 'dev_x/disk1': ('tank', big),        # not a test pool
+                 'dev_x/small': ('testpool1', 4096),  # too small
+                 'used': ('testpool2', big),          # in an imported pool
+                 'mine': ('tank', big)}
+        os.makedirs(f'{self.base}/dev_x')
+        for name, (pool, size) in files.items():
+            path = f'{self.base}/{name}'
+            with open(path, 'w') as f:
+                f.truncate(size)
+            self.commands[f'zdb -l {path}'] = (
+                f"LABEL 0\n    version: 5000\n    name: '{pool}'\n")
+            self.commands[f'zpool labelclear -f {path}'] = ''
+        self.commands['zpool list -vHP'] = (
+            f'rpool\t1G\n\t{self.base}/used\t1G\n')
+        self.commands['zpool list -H -o name'] = 'rpool\n'
+        note = ' (cleared the label of pool {}; left the file)'
+        self.ran = []
+        self.assertEqual(hy.undo_result(self.change('leaked', 'file vdev1')),
+                         note.format('testpool'))
+        self.assertIn(f'zpool labelclear -f {self.base}/vdev1', self.ran)
+        self.ran = []
+        self.assertEqual(hy.undo_result(self.change('leaked', 'file dev_x')),
+                         note.format('testpool1'))
+        self.assertEqual([cmd for cmd in self.ran if 'labelclear' in cmd],
+                         [f'zpool labelclear -f {self.base}/dev_x/disk0'])
+        for name in ('used', 'mine'):
+            self.assertFalse(self.undone('leaked', f'file {name}'))
+            self.assertFalse(any('labelclear' in cmd for cmd in self.ran))
+        for name in files:
+            self.assertTrue(os.path.exists(f'{self.base}/{name}'))
 
     def test_file_owner(self):
         path = os.path.join(self.base, 'mine')
@@ -971,6 +1036,45 @@ class CheckTest(HygieneTest):
         self.assertEqual(self.check('77', self.groupfile, report_only=True),
                          [])
 
+    def test_files_of_other_programs_are_reported_and_left(self):
+        self.record()
+        self.patch(file_owner=lambda path: 'root')
+        os.makedirs(f'{self.base}/dracut.X/initramfs')
+        for name in ('builtin-exitcode.txt', 'dracut.X/initramfs/f',
+                     'tunable-ARC_MAX'):
+            open(f'{self.base}/{name}', 'w').close()
+        self.commands[f'rm -f {self.base}/tunable-ARC_MAX'] = ''
+        self.now += ['file builtin-exitcode.txt', 'file dracut.X',
+                     'file tunable-ARC_MAX']
+        self.assertEqual(self.check(), [
+            'tests/a/b: leaked file builtin-exitcode.txt',
+            'tests/a/b: leaked file dracut.X',
+            'tests/a/b: leaked file tunable-ARC_MAX (undone)'])
+        self.assertTrue(os.path.exists(f'{self.base}/builtin-exitcode.txt'))
+        self.assertTrue(os.path.exists(f'{self.base}/dracut.X/initramfs/f'))
+        self.assertEqual(hy.lines(hy.read(self.reported)), [
+            'leaked file builtin-exitcode.txt', 'leaked file dracut.X'])
+        self.assertEqual(self.check(), [])
+
+    def test_md_device_detached_before_its_file_label_is_cleared(self):
+        self.record()
+        self.patch(UNAME='FreeBSD')
+        img = f'{self.base}/disk.img'
+        with open(img, 'w') as f:
+            f.truncate(hy.MIN_VDEV_SIZE)
+        self.commands.update({
+            'mdconfig -d -u md0': '',
+            f'zdb -l {img}': "    name: 'testpool'\n",
+            f'zpool labelclear -f {img}': '',
+            'zpool list -H -o name': 'rpool\n'})
+        self.now += [f'md md0 {img}', 'file disk.img']
+        self.assertEqual(self.check(), [
+            f'tests/a/b: leaked md md0 {img} (undone)',
+            'tests/a/b: leaked file disk.img (cleared the label of pool '
+            'testpool; left the file)'])
+        self.assertLess(self.ran.index('mdconfig -d -u md0'),
+                        self.ran.index(f'zpool labelclear -f {img}'))
+
     def test_nested_leaked_mounts_undone_deepest_first(self):
         self.record()
         for mnt in ('mnt', 'mnt/sub'):
@@ -1147,7 +1251,9 @@ class PreflightTest(HygieneTest):
 
         os.mkdir(f'{self.base}/testdir1')
         os.mkdir(f'{self.base}/testdir2')
-        for name in ('file-vdev1', 'file-vdev10', 'file-vdev2', 'keep'):
+        os.mkdir(f'{self.base}/testdir.bak')
+        for name in ('file-vdev1', 'file-vdev10', 'file-vdev2', 'keep',
+                     'tempfile01234', 'tempfile.txt'):
             open(os.path.join(self.base, name), 'w').close()
         self.files['/proc/self/mounts'] = (
             f'tank/fs {self.base}/testdir2/m zfs rw 0 0\n')
@@ -1157,6 +1263,7 @@ class PreflightTest(HygieneTest):
         _, output = self.preflight('clean_files')
         self.assertEqual([line.split(self.base)[0] + line.split('/')[-1]
                           for line in output], [
+            'zfs_hygiene: cleaned: leftover tempfile01234)',
             'zfs_hygiene: cleaned: leftover testdir1)',
             'zfs_hygiene: PROBLEM: leftover testdir2 has a file system '
             'mounted in it',

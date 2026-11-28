@@ -42,11 +42,14 @@ zfs_hygiene check [-n] <statefile> <label> [<sid> <groupstatefile>]
     Print one "<label>: ..." line for each difference from the state in
     <statefile>.  Undo what is safe to undo without knowing the test
     (tunables, zinject handlers, and pools, datasets, devices, mounts,
-    users and files that the suite owns), so that one leak does not fail
-    the rest of the run.  Save the state in <statefile> for the next
-    check.  With <sid>, also report and kill the processes the test left
-    running in its session; <groupstatefile> is the statefile of the
-    test's group.  With -n, only report: undo nothing and kill nothing.
+    users, saved tunables and mount points that the suite owns), so that
+    one leak does not fail the rest of the run.  Other files in
+    $TEST_BASE_DIR are only reported, as other programs keep files there
+    too, but a test pool's label on one is cleared.  Save the state in
+    <statefile> for the next check.  With <sid>, also report and kill the
+    processes the test left running in its session; <groupstatefile> is
+    the statefile of the test's group.  With -n, only report: undo nothing
+    and kill nothing.
 
 zfs_hygiene state
     Print the state that check records.
@@ -115,6 +118,17 @@ NOT_TEST_FILES = re.compile(
     r'systemd-private-.*|cloud-init.*|zfs_hygiene')
 # The smallest vdev (SPA_MINDEVSIZE): a smaller file has no ZFS label.
 MIN_VDEV_SIZE = 64 << 20
+# The file of a tunable that save_tunable() saved: tunable-<NAME>, with the
+# NAME from tunables.cfg.
+SAVED_TUNABLE = re.compile(r'tunable-[A-Z0-9_]+')
+# The mount points of the test file systems: $TESTDIR, $TESTDIR0-2, and
+# $TESTDIR<n> for tests that make more.
+TESTDIRS = re.compile(r'testdir[0-9]*')
+# What the pre-flight removes from the test directory: those, the temporary
+# files that default.cfg names (tempfile<pid>), the test zed's directory and
+# the results of zfs-tests.sh.
+LEFTOVER_FILES = re.compile(
+    rf'{TESTDIRS.pattern}|tempfile[0-9]+|zed|zts-results\..*')
 # zed raises zfs_zevent_len_max when it misses events.
 UNSTABLE_TUNABLES = ('zfs/zfs_dbgmsg_enable', 'zfs/zfs_zevent_len_max')
 # How the tests name the kernel variable they change (illumos).
@@ -125,8 +139,8 @@ CTD_DISK = re.compile(r'c[0-9]+(t[0-9A-Fa-f]+)?d[0-9]+([sp][0-9]+)?$')
 # Undo in an order that works: handlers, mounts, swap and dump before the
 # datasets and pools they hold busy, pools before the devices and files they
 # are on.
-UNDO_ORDER = ('tunable zinject mount swap dump dataset pool loop lofi user '
-              'group module file').split()
+UNDO_ORDER = ('tunable zinject mount swap dump dataset pool loop lofi md '
+              'user group module file').split()
 
 
 class Failed(Exception):
@@ -305,18 +319,22 @@ def label_pool(path):
     return m.group(1) if m else None
 
 
-def vdev_sized_files():
-    """Regular files big enough to be vdevs, in $TEST_BASE_DIR and in the
-    directories in it, other than the runner's own."""
-    def listdir(path):
-        try:
-            return [f'{path}/{name}' for name in sorted(os.listdir(path))]
-        except OSError:
-            return []
+def listdir(path):
+    try:
+        return [f'{path}/{name}' for name in sorted(os.listdir(path))]
+    except OSError:
+        return []
+
+
+def vdev_sized_files(top=None):
+    """Regular files big enough to be vdevs, among these paths in
+    $TEST_BASE_DIR and in the ones that are directories (by default all in
+    it other than the runner's own)."""
+    if top is None:
+        top = [path for path in listdir(BASEDIR)
+               if not NOT_TEST_FILES.fullmatch(os.path.basename(path))]
     files = []
-    for path in listdir(BASEDIR):
-        if NOT_TEST_FILES.fullmatch(os.path.basename(path)):
-            continue
+    for path in top:
         if os.path.isdir(path) and not os.path.islink(path):
             if not mounted_under(path):
                 files += listdir(path)
@@ -330,6 +348,27 @@ def vdev_sized_files():
             continue
         if stat.S_ISREG(st.st_mode) and st.st_size >= MIN_VDEV_SIZE:
             found.append(path)
+    return found
+
+
+def files_in_use():
+    """The files that an imported pool or a loop, lofi or md device uses."""
+    used = {row[0] for row in rows(out('zpool', 'list', '-vHP'))}
+    for device in state_devices():
+        used.update(words(device))
+    return used
+
+
+def stale_test_labels(paths, used):
+    """The files among these that have the label of a test pool that is not
+    imported, and that are not in used: [(path, pool)]."""
+    imported = imported_pools()
+    found = []
+    for path in paths:
+        pool = label_pool(path) if path not in used else None
+        if (pool and pool.startswith('testpool') and
+                pool not in KEEP_POOLS and pool not in imported):
+            found.append((path, pool))
     return found
 
 
@@ -835,7 +874,8 @@ def owned(is_ours):
 def undo(change):
     """Undo one change, if it is safe without knowing the test: put tunables
     back, and remove what the test added and the suite owns.  Raise Failed
-    if it was not undone."""
+    if it was not undone.  Return what to report if it was partly undone,
+    else None."""
     op, name = f'{change.what} {change.kind}', change.name
     if op == 'changed tunable':
         set_tunable(name, value(change.was))
@@ -886,14 +926,33 @@ def undo(change):
     elif op == 'leaked module':
         must('modprobe', '-r', name)
     elif op == 'leaked file':
-        # Only what the tests (root or a test user) or the runner's user
-        # made, and not if something is mounted in it.
+        # Package managers, editors and builds also keep files in the test
+        # directory (/var/tmp by default), which come and go while a test
+        # runs.  Remove only a saved tunable, which fails the next test that
+        # saves it, and a test file system's mount point, which fails the
+        # next setup that makes it.
         path = f'{BASEDIR}/{change.rest}'
-        owned(file_owner(path) in ['root', SUDO_USER] + TEST_USERS)
-        owned(not mounted_under(path))
-        must('rm', '-rf', path)
+        if SAVED_TUNABLE.fullmatch(change.rest):
+            owned(os.path.isfile(path) and not os.path.islink(path) and
+                  file_owner(path) == 'root')
+            must('rm', '-f', path)
+            return None
+        if TESTDIRS.fullmatch(change.rest):
+            owned(not mounted_under(path))
+            must('rm', '-rf', path)
+            return None
+        # Of another file, clear a test pool's label, which a later test's
+        # "zpool import -d $TEST_BASE_DIR" would find, and leave the file.
+        files = vdev_sized_files([path])
+        stale = stale_test_labels(files, files_in_use()) if files else []
+        owned(stale)
+        for vdev, _ in stale:
+            must('zpool', 'labelclear', '-f', vdev)
+        pools = ' '.join(sorted({pool for _, pool in stale}))
+        return f'cleared the label of pool {pools}; left the file'
     else:
         raise Failed()
+    return None
 
 
 UNDONE = ' (undone)'
@@ -902,11 +961,11 @@ UNDONE = ' (undone)'
 def undo_result(change):
     """Undo a change, and return what to add to its report."""
     try:
-        undo(change)
-        return UNDONE
+        note = undo(change)
     except Failed as e:
         error = ' '.join(str(e).split())
         return f' (undo failed: {cut(error, 160)})' if error else ''
+    return f' ({note})' if note else UNDONE
 
 
 def ps(pid, column):
@@ -946,7 +1005,8 @@ def check_processes(statefile, label, sid, report_only):
 
 def is_empty_testdir(change, remove):
     """Setup recreates the testdir* mount points, so an empty one left behind
-    does no harm.  Remove it, without a report."""
+    does no harm.  Remove it (rmdir removes only an empty directory), without
+    a report."""
     if not change.text.startswith('leaked file testdir'):
         return False
     path = f'{BASEDIR}/{change.rest}'
@@ -1324,33 +1384,27 @@ class Preflight:
         # A test zed (zed_start()) that an aborted run left running.
         if ok('pgrep', '-f', test_zed_pattern()):
             self.fix('test zed', 'pkill', '-f', test_zed_pattern())
-        for pattern in ('testdir*', 'tempfile*', 'zed', 'zts-results.*'):
-            for path in sorted(glob.glob(f'{base}/{pattern}')):
-                if not os.path.exists(path):
-                    continue
-                if mounted_under(path):
-                    self.problem(f'leftover {path} has a file system '
-                                 'mounted in it')
-                else:
-                    self.fix(f'leftover {path}', 'rm', '-rf', path)
+        for path in listdir(BASEDIR):
+            if (not LEFTOVER_FILES.fullmatch(os.path.basename(path)) or
+                    not os.path.exists(path)):
+                continue
+            if mounted_under(path):
+                self.problem(f'leftover {path} has a file system '
+                             'mounted in it')
+            else:
+                self.fix(f'leftover {path}', 'rm', '-rf', path)
         # zfs-tests.sh refuses to start if its vdev files exist; remove them
         # unless a pool or a loop device still uses them.
-        used = {row[0] for row in rows(out('zpool', 'list', '-vHP'))}
-        for device in state_devices():
-            used.update(words(device))
+        used = files_in_use()
         for path in sorted(glob.glob(f'{base}/file-vdev*')):
             if os.path.isfile(path) and path not in used:
                 self.fix(f'leftover vdev file {path}', 'rm', '-f', path)
         # A run that crashed leaves its tests' vdev files, and the next run's
         # tests that use the same files find them "part of exported pool".
         # Clear only a test pool's label: other files may be anyone's.
-        imported = imported_pools()
-        for path in vdev_sized_files():
-            pool = label_pool(path) if path not in used else None
-            if (pool and pool.startswith('testpool') and
-                    pool not in KEEP_POOLS and pool not in imported):
-                self.fix(f'ZFS label of pool {pool} on {path}',
-                         'zpool', 'labelclear', '-f', path)
+        for path, pool in stale_test_labels(vdev_sized_files(), used):
+            self.fix(f'ZFS label of pool {pool} on {path}',
+                     'zpool', 'labelclear', '-f', path)
         # The run removes its PATH directory when it exits, but not when it
         # is killed or the system crashes.
         current = {os.path.realpath(d) for d in RUN_PATH}
