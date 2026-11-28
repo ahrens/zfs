@@ -69,17 +69,17 @@ set -A array $listing
 obj=${array[0]}
 log_note "file $init_data has object number $obj"
 
-output=$(zdb -ddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null \
-    |grep -m 1 "L1  DVA" )
+# Keep zdb's output: with "zdb | grep -m 1", zdb can still be running when
+# the test goes on.
+zdb_out=$(zdb -ddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null)
+output=$(grep -m 1 "L1  DVA" <<< "$zdb_out")
 dva=$(sed -Ene 's/^.+DVA\[0\]=<([^>]+)>.*/\1/p' <<< "$output")
 log_note "first L1 block $init_data has a DVA of $dva"
-output=$(zdb -ddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null \
-    |grep -m 1 "L0 DVA" )
+output=$(grep -m 1 "L0 DVA" <<< "$zdb_out")
 blk_out0=${output##*>}
 blk_out0=${blk_out0##+([[:space:]])}
 
-output=$(zdb -ddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null \
-    |grep -m 1 "1000  L0 DVA" )
+output=$(grep -m 1 "1000  L0 DVA" <<< "$zdb_out")
 blk_out1=${output##*>}
 blk_out1=${blk_out1##+([[:space:]])}
 

@@ -26,13 +26,6 @@
 
 verify_runnable "global"
 
-for i in $SAVESWAPDEVS ; do
-	log_note "Executing: swap_cleanup $i"
-	swap_cleanup $i >/dev/null 2>&1 ||
-		log_untested "Unable to delete swap device $i because of" \
-				"insufficient RAM"
-done
-
 default_zvol_setup $DISK $VOLSIZE
 
 log_pass

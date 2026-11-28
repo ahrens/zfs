@@ -67,8 +67,10 @@ sync_pool $TESTPOOL true
 read -r obj _ < <(ls -i $init_data)
 log_note "file $init_data has object number $obj"
 
-output=$(zdb -Zddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null \
-    | grep -m 1 "L0 DVA")
+# Keep zdb's output: with "zdb | grep -m 1", zdb can still be running when
+# the test goes on.
+output=$(zdb -Zddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null)
+output=$(grep -m 1 "L0 DVA" <<< "$output")
 dva=$(sed -Ene 's/^.+DVA\[0\]=<([^>]+)>.*$/\1/p' <<< "$output")
 log_note "block 0 of $init_data has a DVA of $dva"
 

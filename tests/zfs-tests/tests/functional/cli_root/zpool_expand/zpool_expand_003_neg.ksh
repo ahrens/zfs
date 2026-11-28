@@ -49,8 +49,9 @@ function cleanup
 {
 	poolexists $TESTPOOL1 && destroy_pool $TESTPOOL1
 
-	if losetup -a | grep -q $DEV1; then
+	if [[ -n "$DEV1" ]]; then
 		losetup -d $DEV1
+		DEV1=""
 	fi
 
 	rm -f $FILE_LO $FILE_RAW

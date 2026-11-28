@@ -31,7 +31,7 @@
 # STRATEGY:
 #	1. Create a new zvol and add it as swap
 #	2. Fill //var/tmp (TEST_BASE_DIR) with 80% the size of the zvol
-#	5. Remove the new zvol, and restore original swap devices
+#	5. Remove the new zvol
 #
 
 verify_runnable "global"

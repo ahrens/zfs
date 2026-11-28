@@ -53,8 +53,10 @@ obj=${array[0]}
 log_note "file $init_data has object number $obj"
 sync_pool $TESTPOOL
 
-output=$(zdb -ddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null \
-    | grep -m 1 "L0 DVA")
+# Keep zdb's output: with "zdb | grep -m 1", zdb can still be running when
+# the test goes on.
+output=$(zdb -ddddddbbbbbb $TESTPOOL/$TESTFS $obj 2> /dev/null)
+output=$(grep -m 1 "L0 DVA" <<< "$output")
 dva=$(sed -Ene 's/^.+DVA\[0\]=<([^>]+)>.*$/\1/p' <<< "$output")
 log_note "block 0 of $init_data has a DVA of $dva"
 cksum_expected=$(sed -Ene 's/^.+ cksum=([a-z0-9:]+)$/\1/p' <<< "$output")

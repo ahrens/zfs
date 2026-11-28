@@ -26,21 +26,6 @@
 
 verify_runnable "global"
 
-if is_linux; then
-	log_must swapon -a
-elif is_freebsd; then
-	swapon -a || true
-else
-	log_must swapadd
-fi
-
-for swapdev in $SAVESWAPDEVS
-do
-	if ! is_swap_inuse $swapdev ; then
-		swap_setup $swapdev
-	fi
-done
-
 voldev=${ZVOL_DEVDIR}/$TESTPOOL/$TESTVOL
 if is_swap_inuse $voldev ; then
 	swap_cleanup $voldev

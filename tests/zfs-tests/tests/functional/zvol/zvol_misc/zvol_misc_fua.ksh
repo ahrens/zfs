@@ -46,6 +46,7 @@ typeset zvolpath=${ZVOL_DEVDIR}/$TESTPOOL/$TESTVOL
 typeset DISK1=${DISKS%% *}
 function cleanup
 {
+	restore_tunable VOL_USE_BLK_MQ
 	vdevs_in_pool $TESTPOOL $datafile3 &&
 	    log_must zpool remove $TESTPOOL $datafile3
 	rm -f "$datafile1" "$datafile2" "$datafile3"
@@ -99,6 +100,7 @@ function do_test {
 log_assert "Verify that a ZFS volume can do Force Unit Access (FUA)"
 log_onexit cleanup
 
+log_must save_tunable VOL_USE_BLK_MQ
 log_must zfs set compression=off $TESTPOOL/$TESTVOL
 log_must truncate -s 100M $datafile3
 log_must zpool add $TESTPOOL log $datafile3
